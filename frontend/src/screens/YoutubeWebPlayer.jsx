@@ -1,5 +1,6 @@
 import React, { forwardRef, useEffect, useImperativeHandle, useRef, useState } from 'react';
-import { View } from 'react-native';
+import { View, TouchableOpacity, StyleSheet } from 'react-native';
+import { Ionicons } from '@expo/vector-icons';
 
 // ---------------------------------------------------------------------------
 // Loads the official YouTube IFrame Player API script exactly once, no matter
@@ -37,9 +38,7 @@ function loadYouTubeIframeAPI() {
 }
 
 // Maps the official numeric YT.PlayerState codes to the same string states
-// the rest of this codebase already expects (matches what
-// react-native-youtube-iframe's onChangeState emits: 'playing', 'paused',
-// 'buffering', 'ended', 'unstarted', 'video cued').
+// the rest of this codebase already expects.
 const YT_STATE_MAP = {
     '-1': 'unstarted',
     0: 'ended',
@@ -49,15 +48,6 @@ const YT_STATE_MAP = {
     5: 'video cued',
 };
 
-/**
- * Web replacement for react-native-youtube-iframe's <YoutubePlayer>.
- * That library's play/mute/onReady props are non-functional on the web
- * target (see github.com/LonelyCpp/react-native-youtube-iframe/issues/340),
- * so this talks to the real YouTube IFrame API directly.
- *
- * Exposes the same imperative surface the rest of the app already relies on
- * via ref: getCurrentTime() -> Promise<number>, seekTo(seconds, allowSeekAhead).
- */
 const YouTubeWebPlayer = forwardRef((props, ref) => {
     const {
         videoId, width, height, play, mute, isHostBool,
@@ -68,12 +58,20 @@ const YouTubeWebPlayer = forwardRef((props, ref) => {
     const playerInstanceRef = useRef(null);
     const [isApiReady, setIsApiReady] = useState(false);
 
-    // Refs so the one-time "create player" effect always reads the latest
-    // play/mute values without needing to be re-run when they change.
+    // Local mute state so joinees (and host) can toggle audio manually
+    const [isLocallyMuted, setIsLocallyMuted] = useState(mute);
+
+    // Refs so the one-time "create player" effect always reads the latest values
     const playRef = useRef(play);
-    const muteRef = useRef(mute);
+    const muteRef = useRef(isLocallyMuted);
+
     useEffect(() => { playRef.current = play; }, [play]);
-    useEffect(() => { muteRef.current = mute; }, [mute]);
+    useEffect(() => { muteRef.current = isLocallyMuted; }, [isLocallyMuted]);
+
+    // Resync local mute if the parent forces a change (e.g. new video loaded)
+    useEffect(() => {
+        setIsLocallyMuted(mute);
+    }, [mute]);
 
     // Load the IFrame API once.
     useEffect(() => {
@@ -82,10 +80,7 @@ const YouTubeWebPlayer = forwardRef((props, ref) => {
         return () => { cancelled = true; };
     }, []);
 
-    // Create (and recreate, on videoId change) the actual player instance.
-    // Intentionally NOT depending on play/mute/isHostBool here — those are
-    // applied imperatively below so changing them doesn't tear down and
-    // rebuild the whole player (which would restart playback from 0).
+    // Create the actual player instance.
     useEffect(() => {
         if (!isApiReady || !containerRef.current || !videoId || !window.YT) return;
 
@@ -104,11 +99,7 @@ const YouTubeWebPlayer = forwardRef((props, ref) => {
                 rel: 0,
                 autoplay: 1,
                 playsinline: 1,
-                // Baking mute into playerVars is what lets the FIRST autoplay
-                // attempt succeed under browser autoplay policy — browsers
-                // allow muted autoplay without a user gesture, so joinees
-                // (who never clicked anything to select this video) need
-                // this to be true from the very first load.
+                // Baking mute into playerVars is required for browser autoplay policies
                 mute: muteRef.current ? 1 : 0,
             },
             events: {
@@ -150,15 +141,15 @@ const YouTubeWebPlayer = forwardRef((props, ref) => {
         } catch (e) { }
     }, [play]);
 
-    // Apply mute state imperatively whenever the `mute` prop changes.
+    // Apply mute state imperatively whenever `isLocallyMuted` changes.
     useEffect(() => {
         const player = playerInstanceRef.current;
         if (!player || typeof player.mute !== 'function') return;
         try {
-            if (mute) player.mute();
+            if (isLocallyMuted) player.mute();
             else player.unMute();
         } catch (e) { }
-    }, [mute]);
+    }, [isLocallyMuted]);
 
     useImperativeHandle(ref, () => ({
         getCurrentTime: async () => {
@@ -180,11 +171,61 @@ const YouTubeWebPlayer = forwardRef((props, ref) => {
         },
     }), []);
 
+    const toggleLocalMute = () => {
+        setIsLocallyMuted(prev => !prev);
+    };
+
     return (
-        <View style={{ width, height, backgroundColor: '#000' }}>
-            <div ref={containerRef} style={{ width: '100%', height: '100%' }} />
+        // Root uses box-none to avoid swallowing touches universally
+        <View style={{ width, height, backgroundColor: '#000', position: 'relative' }} pointerEvents="box-none">
+
+            {/* The actual YouTube iframe */}
+            <div ref={containerRef} style={{ width: '100%', height: '100%', pointerEvents: 'auto' }} />
+
+            {/* INVISIBLE SHIELD: Blocks joinees from touching/scrubbing the YouTube player */}
+            {!isHostBool && (
+                <View
+                    style={[StyleSheet.absoluteFill, { zIndex: 10 }]}
+                    pointerEvents="auto"
+                />
+            )}
+
+            {/* Mute/Unmute Button: Sits safely at Top-Left, above the invisible shield */}
+            {isApiReady && (
+                <TouchableOpacity
+                    style={styles.muteOverlayBtn}
+                    onPress={toggleLocalMute}
+                    pointerEvents="auto"
+                    activeOpacity={0.8}
+                >
+                    <Ionicons
+                        name={isLocallyMuted ? "volume-mute" : "volume-high"}
+                        size={22}
+                        color={isLocallyMuted ? "#FF007A" : "#FFF"}
+                    />
+                </TouchableOpacity>
+            )}
         </View>
     );
+});
+
+const styles = StyleSheet.create({
+    muteOverlayBtn: {
+        position: 'absolute',
+        // Top-Left avoids colliding with Host controls (bottom) or live viewer badges (top-right)
+        top: 15,
+        left: 15,
+        backgroundColor: 'rgba(0, 0, 0, 0.7)',
+        width: 40,
+        height: 40,
+        borderRadius: 20,
+        justifyContent: 'center',
+        alignItems: 'center',
+        zIndex: 100,
+        borderWidth: 1,
+        borderColor: 'rgba(255,255,255,0.15)',
+        cursor: 'pointer',
+    }
 });
 
 export default YouTubeWebPlayer;

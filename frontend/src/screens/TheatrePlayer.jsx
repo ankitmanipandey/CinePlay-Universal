@@ -51,14 +51,13 @@ const TheatrePlayer = forwardRef((props, ref) => {
     return (
         <View style={{ width: width, height: height, backgroundColor: '#000', position: 'relative' }}>
             {youtubeId ? (
-                <View pointerEvents={isHostBool ? 'auto' : 'none'} style={StyleSheet.absoluteFill}>
+                // CRITICAL FIX: On web, we must let touches pass through this container ("box-none")
+                // so the YouTubeWebPlayer can handle its own locking logic and mute button clicks.
+                <View
+                    pointerEvents={Platform.OS === 'web' ? 'box-none' : (isHostBool ? 'auto' : 'none')}
+                    style={StyleSheet.absoluteFill}
+                >
                     {Platform.OS === 'web' ? (
-                        // react-native-youtube-iframe's play/mute/onReady props are
-                        // non-functional on the web target (known upstream bug:
-                        // github.com/LonelyCpp/react-native-youtube-iframe/issues/340),
-                        // which was causing joinees to get stuck on YouTube's static
-                        // "Watch on YouTube" fallback card instead of actually playing.
-                        // On web we drive the official IFrame API directly instead.
                         <YouTubeWebPlayer
                             ref={ytRef}
                             width={width}

@@ -416,15 +416,34 @@ export default function TheatreScreen() {
                             }}
                         >
                             {logic.isVidLink ? (
-                                <View style={{ width: '100%', height: '100%', backgroundColor: '#000', borderRadius: logic.isFullScreen ? 0 : 16, overflow: 'hidden' }}>
+                                <View style={{ width: '100%', height: '100%', backgroundColor: '#000', borderRadius: logic.isFullScreen ? 0 : 16, overflow: 'hidden', position: 'relative' }}>
                                     <iframe
+                                        key={`vidlink-desktop-${logic.vidLinkId}-${logic.vidLinkSeason}-${logic.vidLinkEpisode}-${logic.vidLinkResync.nonce}`}
                                         ref={logic.webViewRef}
-                                        src={logic.vidLinkType === 'tv' ? `https://vidlink.pro/tv/${logic.vidLinkId}/${logic.vidLinkSeason}/${logic.vidLinkEpisode}?autoplay=1` : `https://vidlink.pro/movie/${logic.vidLinkId}?autoplay=1`}
+                                        src={
+                                            (logic.vidLinkType === 'tv'
+                                                ? `https://vidlink.pro/tv/${logic.vidLinkId}/${logic.vidLinkSeason}/${logic.vidLinkEpisode}`
+                                                : `https://vidlink.pro/movie/${logic.vidLinkId}`) +
+                                            `?autoplay=${logic.vidLinkResync.autoplay ? 1 : 0}&startAt=${Math.floor(logic.vidLinkResync.time)}`
+                                        }
                                         style={{ width: '100%', height: '100%', border: 'none' }}
                                         allow="autoplay; encrypted-media; fullscreen"
                                         allowFullScreen
                                         title="Player"
                                     />
+
+                                    {/* Blocks joinees from clicking/scrubbing vidlink's own controls */}
+                                    {!logic.isHostLocal && (
+                                        <View pointerEvents="auto" style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, zIndex: 40 }} />
+                                    )}
+
+                                    {/* Shown instead of trying to actually stop playback (can't command vidlink) */}
+                                    {!logic.isHostLocal && logic.vidLinkHostPaused && (
+                                        <View style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(0,0,0,0.6)', justifyContent: 'center', alignItems: 'center', zIndex: 45 }}>
+                                            <Ionicons name="pause-circle" size={40} color="#FFF" style={{ marginBottom: 8 }} />
+                                            <Text style={{ color: '#FFF', fontWeight: 'bold', fontSize: 15 }}>Paused by host</Text>
+                                        </View>
+                                    )}
                                 </View>
                             ) : (
                                 <View style={{ width: '100%', height: '100%', justifyContent: 'center', alignItems: 'center' }}>
@@ -761,17 +780,34 @@ export default function TheatreScreen() {
                         {logic.isVidLink ? (
                             <View style={{ width: innerVideoWidth, height: innerVideoHeight, backgroundColor: '#000', position: 'relative' }}>
                                 {Platform.OS === 'web' ? (
-                                    <iframe
-                                        ref={logic.webViewRef}
-                                        key={`vidlink-mobile-${logic.vidLinkId}-${logic.vidLinkSeason}-${logic.vidLinkEpisode}`}
-                                        src={logic.vidLinkType === 'tv'
-                                            ? `https://vidlink.pro/tv/${logic.vidLinkId}/${logic.vidLinkSeason}/${logic.vidLinkEpisode}?autoplay=1`
-                                            : `https://vidlink.pro/movie/${logic.vidLinkId}?autoplay=1`}
-                                        style={{ width: '100%', height: '100%', border: 'none' }}
-                                        allow="autoplay; encrypted-media; fullscreen"
-                                        allowFullScreen
-                                        title="Player"
-                                    />
+                                    <>
+                                        <iframe
+                                            ref={logic.webViewRef}
+                                            key={`vidlink-mobile-${logic.vidLinkId}-${logic.vidLinkSeason}-${logic.vidLinkEpisode}-${logic.vidLinkResync.nonce}`}
+                                            src={
+                                                (logic.vidLinkType === 'tv'
+                                                    ? `https://vidlink.pro/tv/${logic.vidLinkId}/${logic.vidLinkSeason}/${logic.vidLinkEpisode}`
+                                                    : `https://vidlink.pro/movie/${logic.vidLinkId}`) +
+                                                `?autoplay=${logic.vidLinkResync.autoplay ? 1 : 0}&startAt=${Math.floor(logic.vidLinkResync.time)}`
+                                            }
+                                            style={{ width: '100%', height: '100%', border: 'none' }}
+                                            allow="autoplay; encrypted-media; fullscreen"
+                                            allowFullScreen
+                                            title="Player"
+                                        />
+
+                                        {/* Blocks joinees from clicking/scrubbing vidlink's own controls */}
+                                        {!logic.isHostLocal && (
+                                            <View pointerEvents="auto" style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, zIndex: 40 }} />
+                                        )}
+
+                                        {!logic.isHostLocal && logic.vidLinkHostPaused && (
+                                            <View style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(0,0,0,0.6)', justifyContent: 'center', alignItems: 'center', zIndex: 45 }}>
+                                                <Ionicons name="pause-circle" size={36} color="#FFF" style={{ marginBottom: 6 }} />
+                                                <Text style={{ color: '#FFF', fontWeight: 'bold', fontSize: 14 }}>Paused by host</Text>
+                                            </View>
+                                        )}
+                                    </>
                                 ) : (
                                     <WebView
                                         ref={logic.webViewRef}
@@ -812,75 +848,75 @@ export default function TheatreScreen() {
                                             return request.url.includes('vidlink.pro') || request.url.includes('about:blank');
                                         }}
                                         injectedJavaScript={`
-                                        (function() {
-                                            var style = document.createElement('style');
-                                            var css = 'iframe[src*="ads"], .ad-overlay { display: none !important; }';
-                                            css += '.pjs-fullscreen, .pjs-icon-fullscreen, [aria-label="Fullscreen"], [title="Fullscreen"], .fullscreen-btn { display: none !important; }';
-                                            style.innerHTML = css;
-                                            document.head.appendChild(style);
+                (function() {
+                    var style = document.createElement('style');
+                    var css = 'iframe[src*="ads"], .ad-overlay { display: none !important; }';
+                    css += '.pjs-fullscreen, .pjs-icon-fullscreen, [aria-label="Fullscreen"], [title="Fullscreen"], .fullscreen-btn { display: none !important; }';
+                    style.innerHTML = css;
+                    document.head.appendChild(style);
 
-                                            window.__isJoinee = ${!logic.isHostLocal};
+                    window.__isJoinee = ${!logic.isHostLocal};
 
-                                            var lockCss = '.pjs-play, .pjs-pause, .pjs-icon-play, .pjs-icon-pause, .pjs-slider, .pjs-progress, .pjs-time, .pjs-rewind, .pjs-forward, .pjs-skip, .pjs-next, .pjs-previous, .pjs-servers, .pjs-playlist, .server-wrapper, .server-list, .servers, .list-server { pointer-events: none !important; opacity: 0.5 !important; } .pjs-video-wrapper, video { pointer-events: none !important; }';
+                    var lockCss = '.pjs-play, .pjs-pause, .pjs-icon-play, .pjs-icon-pause, .pjs-slider, .pjs-progress, .pjs-time, .pjs-rewind, .pjs-forward, .pjs-skip, .pjs-next, .pjs-previous, .pjs-servers, .pjs-playlist, .server-wrapper, .server-list, .servers, .list-server { pointer-events: none !important; opacity: 0.5 !important; } .pjs-video-wrapper, video { pointer-events: none !important; }';
 
-                                            function applyLock() {
-                                                if (document.getElementById('joinee-lock')) return;
-                                                var lock = document.createElement('style');
-                                                lock.id = 'joinee-lock';
-                                                lock.innerHTML = lockCss;
-                                                document.head.appendChild(lock);
-                                            }
-                                            function removeLock() {
-                                                var lock = document.getElementById('joinee-lock');
-                                                if (lock) lock.remove();
-                                            }
+                    function applyLock() {
+                        if (document.getElementById('joinee-lock')) return;
+                        var lock = document.createElement('style');
+                        lock.id = 'joinee-lock';
+                        lock.innerHTML = lockCss;
+                        document.head.appendChild(lock);
+                    }
+                    function removeLock() {
+                        var lock = document.getElementById('joinee-lock');
+                        if (lock) lock.remove();
+                    }
 
-                                            window.__promoteToHost = function() { window.__isJoinee = false; removeLock(); };
-                                            window.__demoteToJoinee = function() { window.__isJoinee = true; applyLock(); };
-                                            if (window.__isJoinee) applyLock();
+                    window.__promoteToHost = function() { window.__isJoinee = false; removeLock(); };
+                    window.__demoteToJoinee = function() { window.__isJoinee = true; applyLock(); };
+                    if (window.__isJoinee) applyLock();
 
-                                            var sendMsg = window.__rn_send || (window.ReactNativeWebView ? window.ReactNativeWebView.postMessage.bind(window.ReactNativeWebView) : null);
+                    var sendMsg = window.__rn_send || (window.ReactNativeWebView ? window.ReactNativeWebView.postMessage.bind(window.ReactNativeWebView) : null);
 
-                                            if (!window.__syncStarted) {
-                                                window.__syncStarted = true;
-                                                var lastState = { playing: false, time: 0 };
-                                                setInterval(function() {
-                                                    var v = document.querySelector('video');
-                                                    if (!v) {
-                                                        var iframes = document.querySelectorAll('iframe');
-                                                        for (var i=0; i<iframes.length; i++) {
-                                                            try { v = iframes[i].contentDocument.querySelector('video'); if (v) break; } catch(e) {}
-                                                        }
-                                                    }
+                    if (!window.__syncStarted) {
+                        window.__syncStarted = true;
+                        var lastState = { playing: false, time: 0 };
+                        setInterval(function() {
+                            var v = document.querySelector('video');
+                            if (!v) {
+                                var iframes = document.querySelectorAll('iframe');
+                                for (var i=0; i<iframes.length; i++) {
+                                    try { v = iframes[i].contentDocument.querySelector('video'); if (v) break; } catch(e) {}
+                                }
+                            }
 
-                                                    if (window.__isJoinee) return;
+                            if (window.__isJoinee) return;
 
-                                                    if (v && sendMsg) {
-                                                        var isPlaying = !v.paused && !v.ended && v.readyState > 2;
-                                                        var time = v.currentTime;
-                                                        if (isPlaying !== lastState.playing) {
-                                                            lastState.playing = isPlaying;
-                                                            sendMsg(JSON.stringify({ type: 'PLAYER_EVENT', data: { event: isPlaying ? 'play' : 'pause', currentTime: time } }));
-                                                        }
-                                                        if (Math.abs(time - lastState.time) > 1.5 && lastState.playing === isPlaying) {
-                                                            sendMsg(JSON.stringify({ type: 'PLAYER_EVENT', data: { event: 'seeked', currentTime: time } }));
-                                                        }
-                                                        lastState.time = time;
-                                                        sendMsg(JSON.stringify({ type: 'PLAYER_EVENT', data: { event: 'timeupdate', currentTime: time } }));
-                                                    }
-                                                }, 1000);
-                                            }
+                            if (v && sendMsg) {
+                                var isPlaying = !v.paused && !v.ended && v.readyState > 2;
+                                var time = v.currentTime;
+                                if (isPlaying !== lastState.playing) {
+                                    lastState.playing = isPlaying;
+                                    sendMsg(JSON.stringify({ type: 'PLAYER_EVENT', data: { event: isPlaying ? 'play' : 'pause', currentTime: time } }));
+                                }
+                                if (Math.abs(time - lastState.time) > 1.5 && lastState.playing === isPlaying) {
+                                    sendMsg(JSON.stringify({ type: 'PLAYER_EVENT', data: { event: 'seeked', currentTime: time } }));
+                                }
+                                lastState.time = time;
+                                sendMsg(JSON.stringify({ type: 'PLAYER_EVENT', data: { event: 'timeupdate', currentTime: time } }));
+                            }
+                        }, 1000);
+                    }
 
-                                            ['click', 'touchstart'].forEach(function(evt) {
-                                                document.addEventListener(evt, function(e) {
-                                                    if (e.isTrusted && sendMsg) {
-                                                        sendMsg(JSON.stringify({ type: 'USER_TOUCH' }));
-                                                    }
-                                                }, { passive: true });
-                                            });
-                                            true;
-                                        })();
-                                    `}
+                    ['click', 'touchstart'].forEach(function(evt) {
+                        document.addEventListener(evt, function(e) {
+                            if (e.isTrusted && sendMsg) {
+                                sendMsg(JSON.stringify({ type: 'USER_TOUCH' }));
+                            }
+                        }, { passive: true });
+                    });
+                    true;
+                })();
+            `}
                                     />
                                 )}
                                 {!logic.overlayVisible && (
@@ -915,7 +951,7 @@ export default function TheatreScreen() {
                         )}
                     </Animated.View>
 
-                    {logic.ytId && (
+                    {!!logic.ytId && (
                         <Animated.View
                             style={[StyleSheet.absoluteFill, { zIndex: 100000, elevation: 100, opacity: logic.overlayAnim }]}
                             pointerEvents={logic.overlayVisible ? "box-none" : "none"}

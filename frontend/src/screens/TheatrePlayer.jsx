@@ -1,5 +1,5 @@
 import React, { forwardRef, useEffect, useRef } from 'react';
-import { Animated, Easing, StyleSheet, Text, TouchableOpacity, View, useWindowDimensions } from 'react-native';
+import { Animated, Easing, Platform, StyleSheet, Text, TouchableOpacity, View, useWindowDimensions } from 'react-native';
 import Svg, { Circle, Defs, Stop, LinearGradient as SvgLinearGradient } from 'react-native-svg';
 import YoutubePlayer from 'react-native-youtube-iframe';
 import { VideoView } from 'expo-video';
@@ -7,6 +7,7 @@ import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons } from '@expo/vector-icons';
 
 import { useTheatrePlayerLogic, formatTime } from '../hooks/useTheatrePlayerLogic';
+import YouTubeWebPlayer from './YoutubeWebPlayer';
 
 // Reusable Loading Animation
 const GradientLoader = () => {
@@ -51,13 +52,32 @@ const TheatrePlayer = forwardRef((props, ref) => {
         <View style={{ width: width, height: height, backgroundColor: '#000', position: 'relative' }}>
             {youtubeId ? (
                 <View pointerEvents={isHostBool ? 'auto' : 'none'} style={StyleSheet.absoluteFill}>
-                    <YoutubePlayer
-                        ref={ytRef} height={height} width={width}
-                        play={isPlaying} mute={isMuted} volume={isMuted ? 0 : 100}
-                        videoId={youtubeId} onChangeState={onPlayerStateChange}
-                        webViewProps={{ allowsFullscreenVideo: false }}
-                        initialPlayerParams={{ controls: isHostBool ? 1 : 0, modestbranding: 1, rel: 0, autoplay: 1 }}
-                    />
+                    {Platform.OS === 'web' ? (
+                        // react-native-youtube-iframe's play/mute/onReady props are
+                        // non-functional on the web target (known upstream bug:
+                        // github.com/LonelyCpp/react-native-youtube-iframe/issues/340),
+                        // which was causing joinees to get stuck on YouTube's static
+                        // "Watch on YouTube" fallback card instead of actually playing.
+                        // On web we drive the official IFrame API directly instead.
+                        <YouTubeWebPlayer
+                            ref={ytRef}
+                            width={width}
+                            height={height}
+                            play={isPlaying}
+                            mute={isMuted}
+                            isHostBool={isHostBool}
+                            videoId={youtubeId}
+                            onChangeState={onPlayerStateChange}
+                        />
+                    ) : (
+                        <YoutubePlayer
+                            ref={ytRef} height={height} width={width}
+                            play={isPlaying} mute={isMuted} volume={isMuted ? 0 : 100}
+                            videoId={youtubeId} onChangeState={onPlayerStateChange}
+                            webViewProps={{ allowsFullscreenVideo: false }}
+                            initialPlayerParams={{ controls: isHostBool ? 1 : 0, modestbranding: 1, rel: 0, autoplay: 1 }}
+                        />
+                    )}
                 </View>
             ) : customUrl ? (
                 <View style={{ width: '100%', height: '100%' }}>

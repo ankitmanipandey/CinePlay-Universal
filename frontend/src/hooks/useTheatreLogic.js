@@ -15,6 +15,12 @@ const OVERLAY_FADE_IN_MS = 200;
 const OVERLAY_FADE_OUT_MS = 300;
 const VIDLINK_OVERLAY_HIDE_MS = 4000;
 
+// vidlink.pro only emits telemetry via postMessage; it does not accept inbound
+// commands. Any resync on web is done by reloading the iframe with ?startAt=.
+const VIDLINK_ORIGIN_SUBSTRING = 'vidlink.pro';
+const VIDLINK_DRIFT_THRESHOLD_SEC = 4;
+const VIDLINK_RESYNC_COOLDOWN_MS = 8000;
+
 const RAW_KEYS = process.env.EXPO_PUBLIC_YOUTUBE_API_KEYS || process.env.EXPO_PUBLIC_YOUTUBE_API_KEY || '';
 let ACTIVE_YT_KEYS = RAW_KEYS.split(',').map(k => k.trim()).filter(Boolean);
 
@@ -78,6 +84,18 @@ export const useTheatreLogic = (width, height, isDesktop) => {
     const vidLinkTimeRef = useRef(0);
     const lastVidLinkEmitRef = useRef(0);
     const isVidLinkRef = useRef(false);
+
+    // --- web-only vidlink resync state ---
+    // localVidLinkTimeRef tracks THIS device's own iframe position, reported
+    // back to us via vidlink's own outward telemetry (postMessage).
+    const localVidLinkTimeRef = useRef(0);
+    const resyncCooldownUntilRef = useRef(0);
+    // vidLinkResync drives the iframe's src/key on web. Bumping `nonce` forces
+    // a full remount (= reload) even if `time` happens to repeat.
+    const [vidLinkResync, setVidLinkResync] = useState({ time: 0, autoplay: true, nonce: 0 });
+    // Shown to non-hosts on web while the host has paused, instead of trying
+    // to actually stop vidlink's playback (which we can't command).
+    const [vidLinkHostPaused, setVidLinkHostPaused] = useState(false);
 
     const [searchType, setSearchType] = useState('youtube');
     const [searchInput, setSearchInput] = useState('');
@@ -184,7 +202,32 @@ export const useTheatreLogic = (width, height, isDesktop) => {
         }
     }, [socket, roomId]);
 
+    // --- web-only listener for vidlink.pro's own outward telemetry ---
+    // vidlink.pro posts messages to whatever page embeds it (postMessage is
+    // designed to cross origins for exactly this). No injection needed here —
+    // this works for BOTH the host (to capture their actions) and the joinee
+    // (to know this device's own current position, for drift comparisons).
+    useEffect(() => {
+        if (Platform.OS !== 'web' || !isVidLink) return;
+
+        const onWindowMessage = (event) => {
+            if (!event.origin || !event.origin.includes(VIDLINK_ORIGIN_SUBSTRING)) return;
+            const msg = event.data;
+            if (!msg || msg.type !== 'PLAYER_EVENT' || !msg.data) return;
+
+            if (typeof msg.data.currentTime === 'number') {
+                localVidLinkTimeRef.current = msg.data.currentTime;
+            }
+            handleVidLinkPlayerEvent(msg.data);
+        };
+
+        window.addEventListener('message', onWindowMessage);
+        return () => window.removeEventListener('message', onWindowMessage);
+    }, [isVidLink, handleVidLinkPlayerEvent]);
+
     const applyVidLinkRemoteSync = useCallback((data) => {
+        // Native-only path (kept exactly as-is; native sync is handled in the
+        // other repo per current scope, this just avoids touching it).
         if (!webViewRef.current) return;
         const t = typeof data.timestamp === 'number' ? data.timestamp : 0;
         const shouldPlay = data.action !== 'pause';
@@ -267,14 +310,16 @@ export const useTheatreLogic = (width, height, isDesktop) => {
             if (isHostRef.current === nowHost) return;
             isHostRef.current = nowHost;
             setIsHostLocal(nowHost);
-            if (!nowHost) webViewRef.current?.injectJavaScript('window.__demoteToJoinee && window.__demoteToJoinee(); true;');
+            if (nowHost) setVidLinkHostPaused(false);
+            if (!nowHost) webViewRef.current?.injectJavaScript && webViewRef.current.injectJavaScript('window.__demoteToJoinee && window.__demoteToJoinee(); true;');
         });
 
         newSocket.on('host_migrated', () => {
             isHostRef.current = true;
             setIsHostLocal(true);
             setIsMuted(false);
-            webViewRef.current?.injectJavaScript('window.__promoteToHost && window.__promoteToHost(); true;');
+            setVidLinkHostPaused(false);
+            webViewRef.current?.injectJavaScript && webViewRef.current.injectJavaScript('window.__promoteToHost && window.__promoteToHost(); true;');
             Toast.show({ type: 'hotstarSuccess', text1: 'You are the new Host!', text2: 'The previous host left. You now control the theatre.' });
         });
 
@@ -288,7 +333,13 @@ export const useTheatreLogic = (width, height, isDesktop) => {
             setYtId(data.ytId);
             setVideoTitle(data.title);
             setIsPlaying(true);
-            setIsMuted(false);
+            setIsMuted(true);
+            // Fresh video: reset local tracking so the very next remote_sync
+            // (which the server sends right after new_video) is treated as a
+            // real seek and reloads the iframe at the host's actual position.
+            localVidLinkTimeRef.current = 0;
+            setVidLinkHostPaused(false);
+            setVidLinkResync(prev => ({ time: 0, autoplay: true, nonce: prev.nonce + 1 }));
         });
 
         newSocket.on('room_not_found', () => {
@@ -309,21 +360,48 @@ export const useTheatreLogic = (width, height, isDesktop) => {
 
         newSocket.on('remote_sync', (data) => {
             if (isHostRef.current) return;
+
             if (isVidLinkRef.current) {
-                setIsPlaying(data.action !== 'pause');
-                applyVidLinkRemoteSync(data);
+                const hostIsPlaying = data.action !== 'pause';
+                setIsPlaying(hostIsPlaying);
+
+                if (Platform.OS === 'web') {
+                    const hostTime = typeof data.timestamp === 'number' ? data.timestamp : 0;
+                    const drift = Math.abs(hostTime - localVidLinkTimeRef.current);
+                    const pauseStateChanged = hostIsPlaying !== isPlayingRef.current;
+                    const now = Date.now();
+                    const inCooldown = now < resyncCooldownUntilRef.current;
+
+                    if (!hostIsPlaying) {
+                        setVidLinkHostPaused(true);
+                    } else if (!inCooldown && (pauseStateChanged || drift > VIDLINK_DRIFT_THRESHOLD_SEC)) {
+                        setVidLinkHostPaused(false);
+                        // Optimistic update — prevents the next heartbeat from comparing
+                        // against the stale pre-reload time while the new iframe is still
+                        // loading/buffering, which is what caused the reload-storm.
+                        localVidLinkTimeRef.current = hostTime;
+                        resyncCooldownUntilRef.current = now + VIDLINK_RESYNC_COOLDOWN_MS;
+                        setVidLinkResync(prev => ({
+                            time: hostTime,
+                            autoplay: true,
+                            nonce: prev.nonce + 1
+                        }));
+                    }
+                    // else: small drift, or within cooldown from a recent resync — ride it out.
+                } else {
+                    applyVidLinkRemoteSync(data);
+                }
                 return;
             }
+
             playerRef.current?.getCurrentTime().then(viewerTime => {
                 const timeDiff = Math.abs(viewerTime - data.timestamp);
                 if (data.action === 'pause') {
-                    setIsMuted(true);
-                    setIsPlaying(true);
-                    if (timeDiff > 0.001) playerRef.current?.seekTo(data.timestamp, true);
+                    setIsPlaying(false);
+                    if (timeDiff > 0.3) playerRef.current?.seekTo(data.timestamp, true);
                 } else {
-                    setIsMuted(false);
                     setIsPlaying(true);
-                    if (timeDiff > 2) playerRef.current?.seekTo(data.timestamp + 0.5, true);
+                    if (timeDiff > 0.75) playerRef.current?.seekTo(data.timestamp, true);
                 }
             }).catch(() => { });
         });
@@ -375,10 +453,16 @@ export const useTheatreLogic = (width, height, isDesktop) => {
             if (state === 'playing') {
                 setIsPlaying(true);
                 socket?.emit('sync_action', { roomId, action: 'play', timestamp: currentTime });
-            } else if (state === 'paused' || state === 'buffering') {
+            } else if (state === 'paused') {
                 setIsPlaying(false);
                 socket?.emit('sync_action', { roomId, action: 'pause', timestamp: currentTime });
             }
+            // 'buffering' is intentionally ignored here — it fires transiently
+            // during normal seeks (dragging the progress bar) and YouTube
+            // auto-resumes playback once buffering finishes on its own.
+            // Treating it as a pause (as this used to do) fights that
+            // auto-resume and forces the video to stick paused after every
+            // seek, for both the host's own player and every synced joinee.
         }).catch(() => { });
     };
 
@@ -464,6 +548,9 @@ export const useTheatreLogic = (width, height, isDesktop) => {
         setYtId(selectedYtId);
         setVideoTitle(selectedTitle);
         setIsPlaying(true);
+        localVidLinkTimeRef.current = 0;
+        setVidLinkHostPaused(false);
+        setVidLinkResync(prev => ({ time: 0, autoplay: true, nonce: prev.nonce + 1 }));
         socket.emit('change_video', { roomId, ytId: selectedYtId, title: selectedTitle });
         Keyboard.dismiss();
     };
@@ -472,6 +559,9 @@ export const useTheatreLogic = (width, height, isDesktop) => {
         if (!isHostLocal) return Toast.show({ type: 'hotstarInfo', text1: 'Only the host can change seasons' });
         const newYtId = `VIDLINK:tv:${vidLinkId}:${seasonNum}:1`;
         setYtId(newYtId);
+        localVidLinkTimeRef.current = 0;
+        setVidLinkHostPaused(false);
+        setVidLinkResync(prev => ({ time: 0, autoplay: true, nonce: prev.nonce + 1 }));
         socket?.emit('change_video', { roomId, ytId: newYtId, title: videoTitle });
     };
 
@@ -479,6 +569,9 @@ export const useTheatreLogic = (width, height, isDesktop) => {
         if (!isHostLocal) return Toast.show({ type: 'hotstarInfo', text1: 'Only the host can change episodes' });
         const newYtId = `VIDLINK:tv:${vidLinkId}:${vidLinkSeason}:${epNum}`;
         setYtId(newYtId);
+        localVidLinkTimeRef.current = 0;
+        setVidLinkHostPaused(false);
+        setVidLinkResync(prev => ({ time: 0, autoplay: true, nonce: prev.nonce + 1 }));
         socket?.emit('change_video', { roomId, ytId: newYtId, title: videoTitle });
     };
 
@@ -569,6 +662,7 @@ export const useTheatreLogic = (width, height, isDesktop) => {
         vidLinkSeason, vidLinkEpisode, overlayTouchRef, overlayAnim, chatAnim,
         isGifPickerVisible, setIsGifPickerVisible, gifSearchQuery, setGifSearchQuery,
         gifs, isFetchingGifs, username, webViewRef, playerRef,
+        vidLinkResync, vidLinkHostPaused, // web resync state
         wakeVidLinkOverlay, extendOverlay, handleVidLinkPlayerEvent, applyVidLinkRemoteSync,
         onPlayerStateChange, sendReaction, removeReaction, removeFloatingMessage,
         toggleDistractionFree, handleVideoTap, sendChatText, sendGif, handleSendMessage,

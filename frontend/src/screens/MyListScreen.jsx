@@ -1,8 +1,85 @@
-import React from 'react';
-import { StyleSheet, Text, View, TouchableOpacity, FlatList, Image, ActivityIndicator, useWindowDimensions, ScrollView } from 'react-native';
+import React, { useState, useRef } from 'react';
+import { StyleSheet, Text, View, TouchableOpacity, FlatList, Image, ActivityIndicator, useWindowDimensions, ScrollView, Animated, Pressable } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons } from '@expo/vector-icons';
 import { useMyListLogic } from '../hooks/useMyListLogic';
+
+// Subcomponent for the Desktop Hoverable Card
+const DesktopMovieCard = ({ item, watchlist, watched, router, handleAuthAction, handleStatusChange }) => {
+    const inWatchlist = !!watchlist[item.id];
+    const inWatched = !!watched[item.id];
+
+    const scaleAnim = useRef(new Animated.Value(1)).current;
+    const [isHovered, setIsHovered] = useState(false);
+
+    const handleHoverIn = () => {
+        setIsHovered(true);
+        Animated.spring(scaleAnim, { toValue: 1.05, friction: 8, tension: 40, useNativeDriver: true }).start();
+    };
+
+    const handleHoverOut = () => {
+        setIsHovered(false);
+        Animated.spring(scaleAnim, { toValue: 1, friction: 8, tension: 40, useNativeDriver: true }).start();
+    };
+
+    const navigateToPlayer = () => {
+        router.push({ pathname: '/player', params: { id: item.id, type: item.media_type } });
+    };
+
+    return (
+        <Pressable
+            onHoverIn={handleHoverIn}
+            onHoverOut={handleHoverOut}
+            onPress={navigateToPlayer}
+            style={styles.pressableCardDesktop}
+        >
+            <Animated.View style={[
+                styles.desktopCard,
+                { transform: [{ scale: scaleAnim }] },
+                isHovered && styles.desktopCardHovered
+            ]}>
+                <View style={styles.desktopPosterContainer}>
+                    <Image source={{ uri: item.poster }} style={styles.desktopPoster} />
+                    <View style={styles.desktopRatingBadge}>
+                        <Ionicons name="star" size={12} color="#F5C518" />
+                        <Text style={styles.desktopRatingText}>{item.rating}</Text>
+                    </View>
+
+                    <View style={[styles.desktopPlayOverlay, isHovered && styles.desktopPlayOverlayHovered]}>
+                        <LinearGradient colors={['#00E5FF', '#9B51E0', '#FF007A']} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={styles.playGradientDesktop}>
+                            <Ionicons name="play" size={24} color="#FFFFFF" style={{ marginLeft: 3 }} />
+                        </LinearGradient>
+                    </View>
+                </View>
+
+                <View style={styles.desktopDetails}>
+                    <Text style={styles.desktopTitle} numberOfLines={1}>{item.title}</Text>
+                    <Text style={styles.desktopMeta}>{item.year} • {item.duration}</Text>
+                    <View style={styles.desktopActions}>
+                        <TouchableOpacity
+                            style={styles.smallIconBtnDesktop}
+                            onPress={(e) => {
+                                e.stopPropagation && e.stopPropagation();
+                                handleAuthAction(() => handleStatusChange(item.id, item.media_type, 'watchlist'));
+                            }}
+                        >
+                            <Ionicons name={inWatchlist ? "bookmark" : "bookmark-outline"} size={16} color={inWatchlist ? "#FF007A" : "#FFFFFF"} />
+                        </TouchableOpacity>
+                        <TouchableOpacity
+                            style={styles.smallIconBtnDesktop}
+                            onPress={(e) => {
+                                e.stopPropagation && e.stopPropagation();
+                                handleAuthAction(() => handleStatusChange(item.id, item.media_type, 'watched'));
+                            }}
+                        >
+                            <Ionicons name="checkmark-done" size={16} color={inWatched ? "#00E5FF" : "#FFFFFF"} />
+                        </TouchableOpacity>
+                    </View>
+                </View>
+            </Animated.View>
+        </Pressable>
+    );
+};
 
 export default function MyListScreenWeb() {
     const { width } = useWindowDimensions();
@@ -49,45 +126,20 @@ export default function MyListScreenWeb() {
                     </View>
                 ) : (
                     <ScrollView
-                        showsVerticalScrollIndicator={false} // <-- Added this to hide the scrollbar
+                        showsVerticalScrollIndicator={false}
                         contentContainerStyle={styles.desktopGrid}
                     >
-                        {activeData.map((item) => {
-                            const inWatchlist = !!watchlist[item.id];
-                            const inWatched = !!watched[item.id];
-
-                            return (
-                                <View key={item.id} style={styles.desktopCard}>
-                                    <View style={styles.desktopPosterContainer}>
-                                        <Image source={{ uri: item.poster }} style={styles.desktopPoster} />
-                                        <View style={styles.desktopRatingBadge}>
-                                            <Ionicons name="star" size={12} color="#F5C518" />
-                                            <Text style={styles.desktopRatingText}>{item.rating}</Text>
-                                        </View>
-                                        <TouchableOpacity
-                                            style={styles.desktopPlayOverlay}
-                                            onPress={() => router.push({ pathname: '/player', params: { id: item.id, type: item.media_type } })}
-                                        >
-                                            <LinearGradient colors={['#00E5FF', '#9B51E0', '#FF007A']} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={styles.playGradientDesktop}>
-                                                <Ionicons name="play" size={24} color="#FFFFFF" style={{ marginLeft: 3 }} />
-                                            </LinearGradient>
-                                        </TouchableOpacity>
-                                    </View>
-                                    <View style={styles.desktopDetails}>
-                                        <Text style={styles.desktopTitle} numberOfLines={1}>{item.title}</Text>
-                                        <Text style={styles.desktopMeta}>{item.year} • {item.duration}</Text>
-                                        <View style={styles.desktopActions}>
-                                            <TouchableOpacity style={styles.smallIconBtnDesktop} onPress={() => handleAuthAction(() => handleStatusChange(item.id, item.media_type, 'watchlist'))}>
-                                                <Ionicons name={inWatchlist ? "bookmark" : "bookmark-outline"} size={16} color={inWatchlist ? "#FF007A" : "#FFFFFF"} />
-                                            </TouchableOpacity>
-                                            <TouchableOpacity style={styles.smallIconBtnDesktop} onPress={() => handleAuthAction(() => handleStatusChange(item.id, item.media_type, 'watched'))}>
-                                                <Ionicons name="checkmark-done" size={16} color={inWatched ? "#00E5FF" : "#FFFFFF"} />
-                                            </TouchableOpacity>
-                                        </View>
-                                    </View>
-                                </View>
-                            );
-                        })}
+                        {activeData.map((item) => (
+                            <DesktopMovieCard
+                                key={item.id}
+                                item={item}
+                                watchlist={watchlist}
+                                watched={watched}
+                                router={router}
+                                handleAuthAction={handleAuthAction}
+                                handleStatusChange={handleStatusChange}
+                            />
+                        ))}
                     </ScrollView>
                 )}
             </View>
@@ -102,7 +154,11 @@ export default function MyListScreenWeb() {
         const inWatched = !!watched[item.id];
 
         return (
-            <View style={styles.movieCardMobile}>
+            <TouchableOpacity
+                style={styles.movieCardMobile}
+                activeOpacity={0.8}
+                onPress={() => router.push({ pathname: '/player', params: { id: item.id, type: item.media_type } })}
+            >
                 <View style={styles.posterContainerMobile}>
                     <Image source={{ uri: item.poster }} style={styles.posterMobile} resizeMode="cover" />
                     <View style={styles.translucentRatingBadgeMobile}>
@@ -117,21 +173,35 @@ export default function MyListScreenWeb() {
                     <Text style={styles.genreMobile} numberOfLines={1}>{item.genre}</Text>
 
                     <View style={styles.actionButtonsRowMobile}>
-                        <TouchableOpacity style={styles.smallIconBtnMobile} activeOpacity={0.8} onPress={() => handleAuthAction(() => handleStatusChange(item.id, item.media_type, 'watchlist'))}>
+                        <TouchableOpacity
+                            style={styles.smallIconBtnMobile}
+                            activeOpacity={0.8}
+                            onPress={(e) => {
+                                e.stopPropagation && e.stopPropagation();
+                                handleAuthAction(() => handleStatusChange(item.id, item.media_type, 'watchlist'));
+                            }}
+                        >
                             <Ionicons name={inWatchlist ? "bookmark" : "bookmark-outline"} size={16} color={inWatchlist ? "#FF007A" : "#FFFFFF"} />
                         </TouchableOpacity>
-                        <TouchableOpacity style={styles.smallIconBtnMobile} activeOpacity={0.8} onPress={() => handleAuthAction(() => handleStatusChange(item.id, item.media_type, 'watched'))}>
+                        <TouchableOpacity
+                            style={styles.smallIconBtnMobile}
+                            activeOpacity={0.8}
+                            onPress={(e) => {
+                                e.stopPropagation && e.stopPropagation();
+                                handleAuthAction(() => handleStatusChange(item.id, item.media_type, 'watched'));
+                            }}
+                        >
                             <Ionicons name="checkmark-done" size={14} color={inWatched ? "#00E5FF" : "#FFFFFF"} />
                         </TouchableOpacity>
                     </View>
                 </View>
 
-                <TouchableOpacity style={styles.playIconBtnMobile} activeOpacity={0.7} onPress={() => router.push({ pathname: '/player', params: { id: item.id, type: item.media_type } })}>
+                <View style={styles.playIconBtnMobile}>
                     <LinearGradient colors={['#00E5FF', '#9B51E0', '#FF007A']} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={styles.playGradientMobile}>
                         <Ionicons name="play" size={20} color="#FFFFFF" style={{ marginLeft: 2 }} />
                     </LinearGradient>
-                </TouchableOpacity>
-            </View>
+                </View>
+            </TouchableOpacity>
         );
     };
 
@@ -197,13 +267,33 @@ const styles = StyleSheet.create({
     activeTabText: { color: '#FFFFFF', fontWeight: 'bold' },
     desktopTabIndicator: { position: 'absolute', bottom: 0, left: 24, right: 24, height: 3, borderRadius: 2 },
 
-    desktopGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 24, paddingBottom: 60 },
+    desktopGrid: {
+        flexDirection: 'row',
+        flexWrap: 'wrap',
+        gap: 24,
+        paddingBottom: 60,
+        paddingTop: 10,
+        paddingHorizontal: 12 // Gives the scaled cards room on the left and right edges
+    },
+
+    pressableCardDesktop: { cursor: 'pointer', zIndex: 1 },
     desktopCard: { width: 220, backgroundColor: '#17171C', borderRadius: 16, overflow: 'hidden', borderWidth: 1, borderColor: 'rgba(255,255,255,0.05)' },
+    desktopCardHovered: {
+        borderColor: 'rgba(0, 229, 255, 0.5)',
+        shadowColor: '#00E5FF',
+        shadowOffset: { width: 0, height: 12 },
+        shadowOpacity: 0.25,
+        shadowRadius: 20,
+        elevation: 15
+    },
+
     desktopPosterContainer: { width: '100%', height: 330, position: 'relative' },
     desktopPoster: { width: '100%', height: '100%' },
     desktopRatingBadge: { position: 'absolute', top: 12, left: 12, flexDirection: 'row', alignItems: 'center', backgroundColor: 'rgba(0,0,0,0.7)', paddingHorizontal: 8, paddingVertical: 4, borderRadius: 6 },
     desktopRatingText: { color: '#FFF', fontSize: 12, fontWeight: 'bold', marginLeft: 4 },
-    desktopPlayOverlay: { position: 'absolute', bottom: -24, right: 16, width: 48, height: 48, borderRadius: 24, overflow: 'hidden', shadowColor: '#9B51E0', shadowOpacity: 0.5, shadowRadius: 10, elevation: 5, cursor: 'pointer' },
+
+    desktopPlayOverlay: { position: 'absolute', bottom: -24, right: 16, width: 48, height: 48, borderRadius: 24, overflow: 'hidden', shadowColor: '#9B51E0', shadowOpacity: 0.5, shadowRadius: 10, elevation: 5 },
+    desktopPlayOverlayHovered: { shadowColor: '#00E5FF', shadowOpacity: 0.8, shadowRadius: 15, elevation: 10, transform: [{ scale: 1.1 }] },
     playGradientDesktop: { flex: 1, justifyContent: 'center', alignItems: 'center' },
 
     desktopDetails: { padding: 16, paddingTop: 32 },
@@ -230,7 +320,8 @@ const styles = StyleSheet.create({
 
     loaderContainerMobile: { flex: 1, justifyContent: 'center', alignItems: 'center' },
     listContentMobile: { paddingHorizontal: 16, paddingTop: 16, paddingBottom: 40 },
-    movieCardMobile: { flexDirection: 'row', backgroundColor: '#1E1428', borderRadius: 12, marginBottom: 16, overflow: 'hidden', alignItems: 'center', borderWidth: 1, borderColor: 'rgba(255,255,255,0.05)', cursor: 'pointer' },
+
+    movieCardMobile: { flexDirection: 'row', backgroundColor: '#1E1428', borderRadius: 12, marginBottom: 16, overflow: 'hidden', alignItems: 'center', borderWidth: 1, borderColor: 'rgba(255,255,255,0.05)' },
     posterContainerMobile: { position: 'relative' },
     posterMobile: { width: 105, height: 155 },
     translucentRatingBadgeMobile: { position: 'absolute', top: 6, left: 6, flexDirection: 'row', alignItems: 'center', backgroundColor: 'rgba(0, 0, 0, 0.65)', paddingHorizontal: 6, paddingVertical: 3, borderRadius: 4 },
@@ -242,9 +333,9 @@ const styles = StyleSheet.create({
     genreMobile: { color: '#A0A0A5', fontSize: 11, fontStyle: 'italic' },
 
     actionButtonsRowMobile: { flexDirection: 'row', gap: 12, marginTop: 12 },
-    smallIconBtnMobile: { width: 32, height: 32, borderRadius: 16, backgroundColor: 'rgba(255, 255, 255, 0.1)', justifyContent: 'center', alignItems: 'center', borderWidth: 1, borderColor: 'rgba(255, 255, 255, 0.2)', cursor: 'pointer' },
+    smallIconBtnMobile: { width: 32, height: 32, borderRadius: 16, backgroundColor: 'rgba(255, 255, 255, 0.1)', justifyContent: 'center', alignItems: 'center', borderWidth: 1, borderColor: 'rgba(255, 255, 255, 0.2)' },
 
-    playIconBtnMobile: { width: 44, height: 44, borderRadius: 22, overflow: 'hidden', marginRight: 14, cursor: 'pointer' },
+    playIconBtnMobile: { width: 44, height: 44, borderRadius: 22, overflow: 'hidden', marginRight: 14 },
     playGradientMobile: { flex: 1, justifyContent: 'center', alignItems: 'center' },
 
     emptyContainerMobile: { alignItems: 'center', marginTop: '40%' },

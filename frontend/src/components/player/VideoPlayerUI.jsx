@@ -582,14 +582,13 @@ const styles = StyleSheet.create({
     container: { flex: 1, backgroundColor: '#0A0A0C' },
 
     // --- DESKTOP STYLES (>= 1024px) ---
-    desktopContainer: { flex: 1, padding: 32, paddingBottom: 0, backgroundColor: '#0A0A0C' },
+    desktopContainer: { flex: 1, padding: 32, backgroundColor: '#0A0A0C' },
     desktopBackBtn: { width: 44, height: 44, borderRadius: 22, backgroundColor: 'rgba(255,255,255,0.08)', justifyContent: 'center', alignItems: 'center', marginBottom: 24, cursor: 'pointer', borderWidth: 1, borderColor: 'rgba(255,255,255,0.1)' },
     desktopLayout: { flex: 1, flexDirection: 'row', gap: 40 },
 
     // LEFT COLUMN: Video Player
     desktopPlayerCol: {
         flex: 1,
-        height: '100%',
         minHeight: 450,
         borderRadius: 24,
         overflow: 'hidden',

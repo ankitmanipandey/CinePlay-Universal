@@ -1,12 +1,120 @@
-import React from 'react';
-import { StyleSheet, Text, View, TextInput, TouchableOpacity, ScrollView, Image, ActivityIndicator, useWindowDimensions, Platform } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context'; // <-- Imported SafeAreaView
+import React, { useState, useRef } from 'react';
+import { StyleSheet, Text, View, TextInput, TouchableOpacity, ScrollView, Image, ActivityIndicator, useWindowDimensions, Platform, Animated, Pressable } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useRouter } from 'expo-router';
 
 import { useSearchLogic, FILTER_CHIPS, formatDuration, formatViews } from '../hooks/useSearchLogic';
 import { getImageUrl } from '../constants/config';
+
+// --------------------------------------------------------
+// SUBCOMPONENTS: HOVERABLE DESKTOP CARDS
+// --------------------------------------------------------
+const HoverableTMDBCard = ({ item, router, handleAuthAction, handleToggleAction, watchlist }) => {
+  const scaleAnim = useRef(new Animated.Value(1)).current;
+  const [isHovered, setIsHovered] = useState(false);
+  const safeId = typeof item.id === 'object' ? item.id?.videoId : item.id;
+  const mediaType = item.media_type || (item.first_air_date ? 'tv' : 'movie');
+
+  const handleHoverIn = () => {
+    setIsHovered(true);
+    Animated.spring(scaleAnim, { toValue: 1.05, friction: 8, tension: 40, useNativeDriver: true }).start();
+  };
+
+  const handleHoverOut = () => {
+    setIsHovered(false);
+    Animated.spring(scaleAnim, { toValue: 1, friction: 8, tension: 40, useNativeDriver: true }).start();
+  };
+
+  return (
+    <Pressable
+      onHoverIn={handleHoverIn}
+      onHoverOut={handleHoverOut}
+      onPress={() => router.push({ pathname: '/player', params: { id: safeId, type: mediaType } })}
+      style={[styles.tmdbCardWrapper, { zIndex: isHovered ? 10 : 1 }]}
+    >
+      <Animated.View style={[
+        styles.tmdbCardDesktop,
+        { transform: [{ scale: scaleAnim }] },
+        isHovered && styles.cardHovered
+      ]}>
+        {getImageUrl(item.poster_path || item.backdrop_path) ? (
+          <Image source={{ uri: getImageUrl(item.poster_path || item.backdrop_path) }} style={styles.cardImage} />
+        ) : (
+          <View style={styles.cardPlaceholder}><Ionicons name="film-outline" size={32} color="#8F98A0" /></View>
+        )}
+        {item.vote_average > 0 && (
+          <View style={styles.translucentRatingBadge}>
+            <Ionicons name="star" size={12} color="#F5C518" />
+            <Text style={styles.smallCardRatingText}>{(item.vote_average).toFixed(1)}</Text>
+          </View>
+        )}
+        <View style={styles.cardActions}>
+          <TouchableOpacity
+            style={styles.smallIconBtn}
+            onPress={(e) => {
+              e.stopPropagation && e.stopPropagation();
+              handleAuthAction(() => handleToggleAction(safeId, mediaType, 'watchlist'));
+            }}
+          >
+            <Ionicons name={watchlist[safeId] ? "bookmark" : "bookmark-outline"} size={16} color={watchlist[safeId] ? "#FF007A" : "#FFFFFF"} />
+          </TouchableOpacity>
+        </View>
+      </Animated.View>
+    </Pressable>
+  );
+};
+
+const HoverableYTCard = ({ item, router }) => {
+  const scaleAnim = useRef(new Animated.Value(1)).current;
+  const [isHovered, setIsHovered] = useState(false);
+  const uniqueKey = item.id?.videoId;
+
+  const handleHoverIn = () => {
+    setIsHovered(true);
+    Animated.spring(scaleAnim, { toValue: 1.05, friction: 8, tension: 40, useNativeDriver: true }).start();
+  };
+
+  const handleHoverOut = () => {
+    setIsHovered(false);
+    Animated.spring(scaleAnim, { toValue: 1, friction: 8, tension: 40, useNativeDriver: true }).start();
+  };
+
+  return (
+    <Pressable
+      onHoverIn={handleHoverIn}
+      onHoverOut={handleHoverOut}
+      onPress={() => router.push({ pathname: '/player', params: { ytId: uniqueKey } })}
+      style={[styles.ytCardWrapper, { zIndex: isHovered ? 10 : 1 }]}
+    >
+      <Animated.View style={[
+        styles.ytFeedCardDesktop,
+        { transform: [{ scale: scaleAnim }] }
+      ]}>
+        <View style={[styles.ytImageContainerDesktop, isHovered && styles.cardHovered]}>
+          <Image source={{ uri: item.snippet?.thumbnails?.high?.url }} style={styles.ytFeedImage} />
+          {isHovered && (
+            <View style={styles.ytPlayOverlayHovered}>
+              <Ionicons name="play-circle" size={48} color="#FF007A" />
+            </View>
+          )}
+          {item.extraDetails?.duration && (
+            <View style={styles.durationBadge}>
+              <Text style={styles.durationText}>{formatDuration(item.extraDetails.duration)}</Text>
+            </View>
+          )}
+        </View>
+        <View style={styles.ytDetails}>
+          <Text style={[styles.ytTitleDesktop, isHovered && { color: '#00E5FF' }]} numberOfLines={2}>
+            {item.snippet?.title}
+          </Text>
+          <Text style={styles.ytChannel}>{item.snippet?.channelTitle} • {formatViews(item.extraDetails?.viewCount)}</Text>
+        </View>
+      </Animated.View>
+    </Pressable>
+  );
+};
 
 export default function SearchScreenWeb() {
   const router = useRouter();
@@ -91,7 +199,7 @@ export default function SearchScreenWeb() {
             <ActivityIndicator size="large" color={isAiMode ? "#9B51E0" : (isYtMode ? "#FF007A" : "#00E5FF")} style={{ marginTop: 60 }} />
           ) : (
             <ScrollView
-              showsVerticalScrollIndicator={false} // <-- HIDES DESKTOP SCROLLBAR
+              showsVerticalScrollIndicator={false}
               contentContainerStyle={styles.scrollContent}
               onScroll={({ nativeEvent }) => { if (nativeEvent.layoutMeasurement.height + nativeEvent.contentOffset.y >= nativeEvent.contentSize.height - 200) handleLoadMore(); }}
               scrollEventThrottle={400}
@@ -101,32 +209,18 @@ export default function SearchScreenWeb() {
 
                 {filteredResults.map((item, index) => {
                   if (isYtMode) {
-                    const uniqueKey = item.id?.videoId || `yt-${index}`;
-                    return (
-                      <TouchableOpacity key={uniqueKey} style={styles.ytFeedCardDesktop} onPress={() => router.push({ pathname: '/player', params: { ytId: item.id?.videoId } })}>
-                        <View style={styles.ytImageContainerDesktop}>
-                          <Image source={{ uri: item.snippet?.thumbnails?.high?.url }} style={styles.ytFeedImage} />
-                          {item.extraDetails?.duration && <View style={styles.durationBadge}><Text style={styles.durationText}>{formatDuration(item.extraDetails.duration)}</Text></View>}
-                        </View>
-                        <View style={styles.ytDetails}>
-                          <Text style={styles.ytTitleDesktop} numberOfLines={2}>{item.snippet?.title}</Text>
-                          <Text style={styles.ytChannel}>{item.snippet?.channelTitle} • {formatViews(item.extraDetails?.viewCount)}</Text>
-                        </View>
-                      </TouchableOpacity>
-                    );
+                    return <HoverableYTCard key={item.id?.videoId || `yt-${index}`} item={item} router={router} />;
                   } else {
                     const safeId = typeof item.id === 'object' ? item.id?.videoId : item.id;
-                    const mediaType = item.media_type || (item.first_air_date ? 'tv' : 'movie');
                     return (
-                      <TouchableOpacity key={safeId} style={styles.tmdbCardDesktop} onPress={() => router.push({ pathname: '/player', params: { id: safeId, type: mediaType } })}>
-                        {getImageUrl(item.poster_path || item.backdrop_path) ? <Image source={{ uri: getImageUrl(item.poster_path || item.backdrop_path) }} style={styles.cardImage} /> : <View style={styles.cardPlaceholder}><Ionicons name="film-outline" size={32} color="#8F98A0" /></View>}
-                        {item.vote_average > 0 && (<View style={styles.translucentRatingBadge}><Ionicons name="star" size={12} color="#F5C518" /><Text style={styles.smallCardRatingText}>{(item.vote_average).toFixed(1)}</Text></View>)}
-                        <View style={styles.cardActions}>
-                          <TouchableOpacity style={styles.smallIconBtn} onPress={() => handleAuthAction(() => handleToggleAction(safeId, mediaType, 'watchlist'))}>
-                            <Ionicons name={watchlist[safeId] ? "bookmark" : "bookmark-outline"} size={16} color={watchlist[safeId] ? "#FF007A" : "#FFFFFF"} />
-                          </TouchableOpacity>
-                        </View>
-                      </TouchableOpacity>
+                      <HoverableTMDBCard
+                        key={safeId}
+                        item={item}
+                        router={router}
+                        handleAuthAction={handleAuthAction}
+                        handleToggleAction={handleToggleAction}
+                        watchlist={watchlist}
+                      />
                     );
                   }
                 })}
@@ -258,7 +352,7 @@ export default function SearchScreenWeb() {
 
 const styles = StyleSheet.create({
   // --- DESKTOP STYLES (>= 1024px) ---
-  desktopContainer: { flex: 1, backgroundColor: '#0A0A0C', padding: 24 },
+  desktopContainer: { flex: 1, backgroundColor: '#0A0A0C', padding: 24, paddingLeft: 96 },
   desktopHeaderRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 32, gap: 24 },
   searchBox: { flex: 1, maxWidth: 600, flexDirection: 'row', alignItems: 'center', backgroundColor: '#25252A', borderRadius: 28, height: 56, paddingHorizontal: 20 },
   searchBoxActive: { borderWidth: 1, borderColor: '#00E5FF', backgroundColor: '#1C2533' },
@@ -284,14 +378,27 @@ const styles = StyleSheet.create({
   chipText: { color: '#A0A0A5', fontSize: 14, fontWeight: '600' },
   activeChipText: { color: '#FFFFFF', fontSize: 14, fontWeight: 'bold' },
 
-  scrollContent: { paddingBottom: 60 },
+  scrollContent: { paddingBottom: 60, paddingHorizontal: 12, paddingTop: 12 },
   desktopGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 20 },
   emptyText: { color: '#8F98A0', fontSize: 18, width: '100%', textAlign: 'center', marginTop: 40 },
 
-  tmdbCardDesktop: { width: '15%', minWidth: 160, aspectRatio: 2 / 3, borderRadius: 8, overflow: 'hidden', backgroundColor: '#1E1E24', cursor: 'pointer' },
-  ytFeedCardDesktop: { width: '23%', minWidth: 280, marginBottom: 32, cursor: 'pointer' },
-  ytImageContainerDesktop: { width: '100%', aspectRatio: 16 / 9, borderRadius: 12, overflow: 'hidden', backgroundColor: '#1E1E24' },
+  tmdbCardWrapper: { width: '15%', minWidth: 160, aspectRatio: 2 / 3, cursor: 'pointer' },
+  tmdbCardDesktop: { flex: 1, width: '100%', height: '100%', borderRadius: 8, overflow: 'hidden', backgroundColor: '#1E1E24', borderWidth: 1, borderColor: 'transparent' },
+
+  ytCardWrapper: { width: '23%', minWidth: 280, marginBottom: 32, cursor: 'pointer' },
+  ytFeedCardDesktop: { flex: 1, width: '100%' },
+  ytImageContainerDesktop: { width: '100%', aspectRatio: 16 / 9, borderRadius: 12, overflow: 'hidden', backgroundColor: '#1E1E24', borderWidth: 1, borderColor: 'transparent', position: 'relative' },
+  ytPlayOverlayHovered: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(0,0,0,0.4)', justifyContent: 'center', alignItems: 'center' },
   ytTitleDesktop: { color: '#FFF', fontSize: 16, fontWeight: '600', lineHeight: 24 },
+
+  cardHovered: {
+    borderColor: 'rgba(0, 229, 255, 0.5)',
+    shadowColor: '#00E5FF',
+    shadowOffset: { width: 0, height: 10 },
+    shadowOpacity: 0.25,
+    shadowRadius: 15,
+    elevation: 10
+  },
 
   // --- MOBILE & TABLET STYLES (< 1024px, Exact Native Match) ---
   mobileContainer: { flex: 1, backgroundColor: '#0A0A0C' },

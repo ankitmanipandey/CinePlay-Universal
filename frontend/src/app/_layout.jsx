@@ -300,6 +300,19 @@ export default function RootLayout() {
   }, []);
 
   useEffect(() => {
+    if (Platform.OS === 'web' && typeof navigator !== 'undefined' && 'serviceWorker' in navigator) {
+      const register = () => {
+        navigator.serviceWorker
+          .register('/sw.js')
+          .catch((err) => console.warn('Service worker registration failed:', err));
+      };
+      if (document.readyState === 'complete') register();
+      else window.addEventListener('load', register);
+      return () => window.removeEventListener('load', register);
+    }
+  }, []);
+
+  useEffect(() => {
     const checkUserAuth = async () => {
       try {
         let storedToken = Platform.OS === 'web' ? localStorage.getItem('userToken') : await SecureStore.getItemAsync('userToken');

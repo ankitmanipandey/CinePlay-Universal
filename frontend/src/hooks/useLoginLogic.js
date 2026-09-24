@@ -92,7 +92,7 @@ export const useLoginLogic = () => {
 
     const handleAuthSuccess = async (responseObj, successMessage) => {
         await setSession(responseObj.token, responseObj);
-        router.replace('/tabs/home');
+        router.replace('/home');
         setTimeout(() => {
             Toast.show({
                 type: 'hotstarSuccess',

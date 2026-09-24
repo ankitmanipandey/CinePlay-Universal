@@ -24,6 +24,10 @@ export const usePlayerLogic = () => {
     const [selectedEpisode, setSelectedEpisode] = useState(1);
 
     const [isVideoPlaying, setIsVideoPlaying] = useState(true);
+
+    // NEW: Server selection state defaulting to Vidlink
+    const [server, setServer] = useState('vidlink');
+
     const creatingRoomRef = useRef(false);
 
     const livePlayer = useVideoPlayer(null, (player) => {
@@ -41,7 +45,7 @@ export const usePlayerLogic = () => {
         }
     }, [type, musicState]);
 
-    const { isLoading, mediaDetails, trailerKey, isVidkingAvailable } = useMediaDetails({
+    const { isLoading, mediaDetails, trailerKey, isVidkingAvailable, anilistId } = useMediaDetails({
         id, type, ytId, streamUrl, channelName, artworkUrl,
         livePlayer,
         setMusicQueue: musicState.setMusicQueue,
@@ -78,6 +82,12 @@ export const usePlayerLogic = () => {
     };
 
     const handleCreateWatchParty = (vidIdArg, titleArg) => {
+        // NEW: Block Watch Party on alternative servers
+        if (server !== 'vidlink') {
+            Toast.show({ type: 'hotstarInfo', text1: 'Watch party is only available on Server 1 (Vidlink)', position: 'top' });
+            return;
+        }
+
         handleAuthAction(async () => {
             if (creatingRoomRef.current) return;
             creatingRoomRef.current = true;
@@ -121,6 +131,7 @@ export const usePlayerLogic = () => {
         activeMediaView, setActiveMediaView, selectedSeason, setSelectedSeason,
         selectedEpisode, setSelectedEpisode, isVideoPlaying, setIsVideoPlaying,
         livePlayer, musicState, isLoading, mediaDetails, trailerKey, isVidkingAvailable,
-        watchlist, watched, handleAuthAction, handleToggleAction, handleCreateWatchParty
+        watchlist, watched, handleAuthAction, handleToggleAction, handleCreateWatchParty,
+        server, setServer, anilistId
     };
 };

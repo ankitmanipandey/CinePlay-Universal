@@ -18,7 +18,10 @@ export default function PlayerScreenWeb() {
         activeMediaView, setActiveMediaView, selectedSeason, setSelectedSeason,
         selectedEpisode, setSelectedEpisode, isVideoPlaying, setIsVideoPlaying,
         livePlayer, musicState, isLoading, mediaDetails, trailerKey, isVidkingAvailable,
-        watchlist, watched, handleAuthAction, handleToggleAction, handleCreateWatchParty
+        watchlist, watched, handleAuthAction, handleToggleAction, handleCreateWatchParty,
+        server,
+        setServer,
+        anilistId
     } = usePlayerLogic();
 
     if (isLoading) {
@@ -68,7 +71,10 @@ export default function PlayerScreenWeb() {
                         handleCreateWatchParty={handleCreateWatchParty} handleAuthAction={handleAuthAction}
                         handleToggleAction={handleToggleAction} watchlist={watchlist} watched={watched}
                         livePlayer={livePlayer} id={id} type={type} channelName={channelName} router={router}
-                        isDesktop={true} // Passes layout state down for inner component styling
+                        isDesktop={true}
+                        server={server}
+                        setServer={setServer}
+                        anilistId={anilistId}
                     />
                 )}
             </View>

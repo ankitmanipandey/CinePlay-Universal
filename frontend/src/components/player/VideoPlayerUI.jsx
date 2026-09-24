@@ -1,4 +1,4 @@
-import React, { useEffect, useRef } from 'react';
+import React, { useEffect, useRef, useMemo, useCallback } from 'react';
 import { View, Text, TouchableOpacity, ScrollView, Image, StatusBar, Animated, StyleSheet, Platform } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -6,13 +6,33 @@ import { Ionicons } from '@expo/vector-icons';
 import { WebView } from 'react-native-webview';
 import YoutubePlayer from 'react-native-youtube-iframe';
 import { VideoView } from 'expo-video';
+import Toast from 'react-native-toast-message';
 import { getImageUrl } from '../../constants/config';
 
 import { useVideoPlayerUILogic } from '../../hooks/useVideoPlayerUILogic';
 
 const DESKTOP_USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36';
 
-const adBlockScript = `
+const SERVERS = {
+    vidlink: {
+        label: 'Server 1', host: 'vidlink.pro', referer: 'https://vidlink.pro/',
+        movieUrl: (id) => `https://vidlink.pro/movie/${id}?autoplay=1`,
+        tvUrl: (id, s, e) => `https://vidlink.pro/tv/${id}/${s}/${e}?autoplay=1`
+    },
+    filmu: {
+        label: 'Server 2', host: 'embed.filmu.in', referer: 'https://embed.filmu.in/',
+        movieUrl: (id) => `https://embed.filmu.in/movie/${id}`,
+        tvUrl: (id, s, e) => `https://embed.filmu.in/tv/${id}/${s}/${e}`,
+        animeUrl: (anilistId, s, e) => (s && e) ? `https://embed.filmu.in/anime/${anilistId}/${s}/${e}` : `https://embed.filmu.in/anime/${anilistId}`
+    },
+    vidsrc: {
+        label: 'Server 3', host: 'vidsrc.sbs', referer: 'https://vidsrc.sbs/',
+        movieUrl: (id) => `https://vidsrc.sbs/embed/movie/${id}?autoplay=1`,
+        tvUrl: (id, s, e) => `https://vidsrc.sbs/embed/tv/${id}/${s}/${e}?autoplay=1`
+    }
+};
+
+const buildAdBlockScript = (host) => `
     (function() {
         try {
             var fakeUA = '${DESKTOP_USER_AGENT}';
@@ -22,16 +42,19 @@ const adBlockScript = `
             Object.defineProperty(navigator, 'webdriver', { get: function() { return false; } });
             Object.defineProperty(navigator, 'plugins', { get: function() { return [1, 2, 3, 4, 5]; } });
         } catch (e) {}
+        
         if (window.ReactNativeWebView) {
             window.__rn_send = window.ReactNativeWebView.postMessage.bind(window.ReactNativeWebView);
             try { delete window.ReactNativeWebView; } catch(e) {}
         }
+        
         window.open = function() { return null; };
         try { Object.defineProperty(window, 'open', { configurable: false, writable: false, value: function() { return null; } }); } catch(e) {}
+        
         document.addEventListener('click', function(e) {
             var t = e.target;
             while (t && t !== document) {
-                if (t.tagName === 'A' && (t.getAttribute('target') === '_blank' || (!t.href.includes('vidlink.pro') && !t.href.startsWith('blob:')))) {
+                if (t.tagName === 'A' && (t.getAttribute('target') === '_blank' || (!t.href.includes('${host}') && !t.href.startsWith('blob:')))) {
                     e.preventDefault();
                     e.stopPropagation();
                     e.stopImmediatePropagation();
@@ -40,6 +63,7 @@ const adBlockScript = `
                 t = t.parentNode;
             }
         }, true);
+        
         var killAdOverlays = function() {
             var divs = document.querySelectorAll('div');
             for (var i = 0; i < divs.length; i++) {
@@ -47,7 +71,15 @@ const adBlockScript = `
                 var z = window.getComputedStyle(el).zIndex;
                 if (z && parseInt(z) > 9999) {
                     var className = el.className || '';
-                    if (typeof className === 'string' && className.indexOf('jw-') === -1 && className.indexOf('vjs-') === -1) {
+                    if (
+                        typeof className === 'string' && 
+                        className.indexOf('jw-') === -1 && 
+                        className.indexOf('vjs-') === -1 &&
+                        className.indexOf('plyr') === -1 && 
+                        className.toLowerCase().indexOf('fullscreen') === -1 &&
+                        !document.fullscreenElement &&
+                        el !== document.fullscreenElement
+                    ) {
                         el.style.display = 'none';
                         el.style.pointerEvents = 'none';
                     }
@@ -59,14 +91,6 @@ const adBlockScript = `
     })();
 `;
 
-// =========================================================
-// WEB-ONLY HLS PLAYER
-// Browsers (other than Safari) have no native HLS support in
-// <video>, so expo-video's VideoView (which just wraps a plain
-// <video> tag on web) silently fails on .m3u8 sources. This
-// attaches hls.js's MediaSource-based player instead. Safari
-// gets native HLS via canPlayType and skips hls.js entirely.
-// =========================================================
 const LiveTvWebPlayer = ({ streamUrl, isPlaying, videoRef }) => {
     const internalRef = useRef(null);
     const ref = videoRef || internalRef;
@@ -79,7 +103,6 @@ const LiveTvWebPlayer = ({ streamUrl, isPlaying, videoRef }) => {
         let cancelled = false;
 
         const setup = async () => {
-            // Safari / native HLS support
             if (video.canPlayType('application/vnd.apple.mpegurl')) {
                 video.src = streamUrl;
                 return;
@@ -99,7 +122,6 @@ const LiveTvWebPlayer = ({ streamUrl, isPlaying, videoRef }) => {
                     hls.attachMedia(video);
                     hls.on(Hls.Events.ERROR, (_evt, data) => {
                         if (data?.fatal) {
-                            console.warn('[LiveTvWebPlayer] fatal hls.js error:', data.type, data.details);
                             switch (data.type) {
                                 case Hls.ErrorTypes.NETWORK_ERROR:
                                     hls.startLoad();
@@ -113,12 +135,8 @@ const LiveTvWebPlayer = ({ streamUrl, isPlaying, videoRef }) => {
                             }
                         }
                     });
-                } else {
-                    console.warn('[LiveTvWebPlayer] HLS is not supported in this browser.');
                 }
-            } catch (err) {
-                console.warn('[LiveTvWebPlayer] failed to load hls.js:', err);
-            }
+            } catch (err) { }
         };
 
         setup();
@@ -160,7 +178,8 @@ export const VideoPlayerUI = (props) => {
         activeMediaView, setActiveMediaView, isVidkingAvailable,
         selectedSeason, setSelectedSeason, selectedEpisode, setSelectedEpisode,
         handleCreateWatchParty, handleAuthAction, handleToggleAction,
-        watchlist, watched, livePlayer, id, type, channelName, router, isDesktop
+        watchlist, watched, livePlayer, id, type, channelName, router, isDesktop,
+        server, setServer, anilistId
     } = props;
 
     const {
@@ -170,6 +189,44 @@ export const VideoPlayerUI = (props) => {
     } = useVideoPlayerUILogic(props);
 
     const webVideoRef = useRef(null);
+    const iframeRef = useRef(null);
+
+    const adScript = useMemo(() => buildAdBlockScript(SERVERS[server].host), [server]);
+
+    const injectedFallbackScript = useMemo(() => `
+        (function() {
+            var style = document.createElement('style');
+            var css = 'iframe[src*="ads"], .ad-overlay { display: none !important; }';
+            css += '.pjs-fullscreen, .pjs-icon-fullscreen, [aria-label="Fullscreen"], [title="Fullscreen"], .fullscreen-btn, .jw-icon-fullscreen, .vjs-fullscreen-control, [data-plyr="fullscreen"] { display: none !important; }';
+            style.innerHTML = css;
+            document.head.appendChild(style);
+            
+            setTimeout(function() {
+                var text = document.body.innerText.toLowerCase();
+                if (
+                    text.includes('video not found') || 
+                    text.includes('media not found') || 
+                    text.includes('404 not found') ||
+                    text.includes('could not be found')
+                ) {
+                    if (window.ReactNativeWebView) {
+                        window.ReactNativeWebView.postMessage('FALLBACK_REQUEST');
+                    }
+                }
+            }, 3000);
+        })();
+        true;
+    `, [server]);
+
+    const handleServerFallback = useCallback(() => {
+        if (server === 'vidlink') {
+            Toast.show({ type: 'hotstarInfo', text1: 'Not available on Server 1. Trying Server 2...', position: 'top' });
+            setServer('filmu');
+        } else if (server === 'filmu') {
+            Toast.show({ type: 'hotstarInfo', text1: 'Not available on Server 2. Trying Server 3...', position: 'top' });
+            setServer('vidsrc');
+        }
+    }, [server, setServer]);
 
     const handleWebPlayPause = () => {
         resetControlsTimer();
@@ -184,9 +241,22 @@ export const VideoPlayerUI = (props) => {
         }
     };
 
-    // --------------------------------------------------------
-    // DESKTOP LAYOUT (Player on Left, Details on Right)
-    // --------------------------------------------------------
+    const handleIframeFullscreen = () => {
+        const el = iframeRef.current;
+        if (!el) return;
+        if (el.requestFullscreen) el.requestFullscreen();
+        else if (el.webkitRequestFullscreen) el.webkitRequestFullscreen();
+        else if (el.mozRequestFullScreen) el.mozRequestFullScreen();
+        else if (el.msRequestFullscreen) el.msRequestFullscreen();
+    };
+
+    const getActiveServerUri = () => {
+        if (server === 'filmu' && anilistId) {
+            return SERVERS.filmu.animeUrl(anilistId, type === 'tv' ? selectedSeason : null, type === 'tv' ? selectedEpisode : null);
+        }
+        return type === 'tv' ? SERVERS[server].tvUrl(id, selectedSeason, selectedEpisode) : SERVERS[server].movieUrl(id);
+    };
+
     if (isDesktop) {
         return (
             <SafeAreaView style={styles.safeArea} edges={['top', 'left', 'right']}>
@@ -241,28 +311,50 @@ export const VideoPlayerUI = (props) => {
                                     </>
                                 ) : activeMediaView === 'movie' ? (
                                     Platform.OS === 'web' ? (
-                                        <iframe
-                                            key={`vidlink-${selectedSeason}-${selectedEpisode}`}
-                                            src={type === 'tv' ? `https://vidlink.pro/tv/${id}/${selectedSeason}/${selectedEpisode}?autoplay=1` : `https://vidlink.pro/movie/${id}?autoplay=1`}
-                                            style={{ width: '100%', height: '100%', border: 'none' }}
-                                            allow="autoplay; encrypted-media; fullscreen"
-                                            allowFullScreen
-                                            title="Player"
-                                        />
+                                        <View style={{ width: '100%', height: '100%', position: 'relative' }}>
+                                            <iframe
+                                                ref={iframeRef}
+                                                key={`${server}-${selectedSeason}-${selectedEpisode}`}
+                                                src={getActiveServerUri()}
+                                                style={{ width: '100%', height: '100%', border: 'none' }}
+                                                allow="autoplay; encrypted-media; fullscreen; picture-in-picture"
+                                                allowFullScreen={true}
+                                                webkitallowfullscreen="true"
+                                                mozallowfullscreen="true"
+                                                title="Player"
+                                            />
+                                            {/* ONLY SHOW FULLSCREEN OVERRIDE FOR VIDSRC */}
+                                            {server === 'vidsrc' && (
+                                                <TouchableOpacity
+                                                    style={[styles.desktopExpandBtn, { cursor: 'pointer' }]}
+                                                    activeOpacity={0.8}
+                                                    onPress={handleIframeFullscreen}
+                                                >
+                                                    <Ionicons name="expand" size={20} color="#FFFFFF" />
+                                                </TouchableOpacity>
+                                            )}
+                                        </View>
                                     ) : (
                                         <WebView
                                             ref={webViewRef}
-                                            key={`vidlink-${selectedSeason}-${selectedEpisode}`}
-                                            source={{
-                                                uri: type === 'tv' ? `https://vidlink.pro/tv/${id}/${selectedSeason}/${selectedEpisode}?autoplay=1` : `https://vidlink.pro/movie/${id}?autoplay=1`,
-                                                headers: { 'Referer': 'https://vidlink.pro/', 'User-Agent': DESKTOP_USER_AGENT }
-                                            }}
+                                            key={`${server}-${selectedSeason}-${selectedEpisode}`}
+                                            source={{ uri: getActiveServerUri(), headers: { 'Referer': SERVERS[server].referer, 'User-Agent': DESKTOP_USER_AGENT } }}
                                             userAgent={DESKTOP_USER_AGENT}
                                             style={{ flex: 1, backgroundColor: '#000' }}
                                             javaScriptEnabled={true} domStorageEnabled={true} allowsFullscreenVideo={true} mediaPlaybackRequiresUserAction={false}
-                                            injectedJavaScriptBeforeContentLoaded={adBlockScript}
-                                            injectedJavaScript={`(function() { var style = document.createElement('style'); var css = 'iframe[src*="ads"], .ad-overlay { display: none !important; }'; style.innerHTML = css; document.head.appendChild(style); })(); true;`}
-                                            onShouldStartLoadWithRequest={(request) => request.url.includes('vidlink.pro') || request.url.includes('about:blank')}
+                                            injectedJavaScriptBeforeContentLoaded={adScript}
+                                            injectedJavaScript={injectedFallbackScript}
+                                            onMessage={(event) => { if (event.nativeEvent.data === 'FALLBACK_REQUEST') { handleServerFallback(); } }}
+                                            onHttpError={(syntheticEvent) => {
+                                                if (syntheticEvent.nativeEvent.statusCode >= 400 && syntheticEvent.nativeEvent.url.includes(SERVERS[server].host)) {
+                                                    handleServerFallback();
+                                                }
+                                            }}
+                                            onError={() => handleServerFallback()}
+                                            onShouldStartLoadWithRequest={(request) => {
+                                                if (request.isTopFrame === false) return true;
+                                                return request.url.includes(SERVERS[server].host) || request.url.startsWith('about:blank');
+                                            }}
                                         />
                                     )
                                 ) : trailerKey ? (
@@ -341,7 +433,26 @@ export const VideoPlayerUI = (props) => {
                                         )
                                     )}
 
-                                    {activeMediaView === 'movie' && !streamUrl && !ytId && isVidkingAvailable && (
+                                    {activeMediaView === 'movie' && !streamUrl && !ytId && (
+                                        <View style={styles.desktopTvControlsContainer}>
+                                            <Text style={styles.tvControlsLabel}>Server</Text>
+                                            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.tvControlsRow}>
+                                                <TouchableOpacity style={[styles.tvChip, server === 'vidlink' && styles.tvChipActive, { cursor: 'pointer' }]} onPress={() => setServer('vidlink')}>
+                                                    <Text style={[styles.tvChipText, server === 'vidlink' && styles.tvChipTextActive]}>{SERVERS.vidlink.label}</Text>
+                                                </TouchableOpacity>
+
+                                                <TouchableOpacity style={[styles.tvChip, server === 'filmu' && styles.tvChipActive, { cursor: 'pointer' }]} onPress={() => setServer('filmu')}>
+                                                    <Text style={[styles.tvChipText, server === 'filmu' && styles.tvChipTextActive]}>{SERVERS.filmu.label}</Text>
+                                                </TouchableOpacity>
+
+                                                <TouchableOpacity style={[styles.tvChip, server === 'vidsrc' && styles.tvChipActive, { cursor: 'pointer' }]} onPress={() => setServer('vidsrc')}>
+                                                    <Text style={[styles.tvChipText, server === 'vidsrc' && styles.tvChipTextActive]}>{SERVERS.vidsrc.label}</Text>
+                                                </TouchableOpacity>
+                                            </ScrollView>
+                                        </View>
+                                    )}
+
+                                    {activeMediaView === 'movie' && !streamUrl && !ytId && isVidkingAvailable && server === 'vidlink' && (
                                         <TouchableOpacity style={[styles.watchToggleBtn, { marginTop: 12, cursor: 'pointer' }]} activeOpacity={0.8} onPress={() => { const watchPartyYtId = type === 'tv' ? `VIDLINK:tv:${id}:${selectedSeason}:${selectedEpisode}` : `VIDLINK:movie:${id}`; handleCreateWatchParty(watchPartyYtId, title); }}>
                                             <LinearGradient colors={['#00E5FF', '#9B51E0']} start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }} style={styles.watchToggleGradient}>
                                                 <Ionicons name="people-circle" size={24} color="#FFF" style={{ marginRight: 8 }} />
@@ -379,9 +490,6 @@ export const VideoPlayerUI = (props) => {
         );
     }
 
-    // --------------------------------------------------------
-    // MOBILE & TABLET LAYOUT (Exact Native Clone)
-    // --------------------------------------------------------
     return (
         <SafeAreaView style={styles.safeArea} edges={isFullScreen ? [] : ['top', 'left', 'right']}>
             <View style={styles.container}>
@@ -426,25 +534,50 @@ export const VideoPlayerUI = (props) => {
                             </>
                         ) : activeMediaView === 'movie' ? (
                             Platform.OS === 'web' ? (
-                                <iframe
-                                    key={`vidlink-${selectedSeason}-${selectedEpisode}`}
-                                    src={type === 'tv' ? `https://vidlink.pro/tv/${id}/${selectedSeason}/${selectedEpisode}?autoplay=1` : `https://vidlink.pro/movie/${id}?autoplay=1`}
-                                    style={{ width: '100%', height: '100%', border: 'none' }}
-                                    allow="autoplay; encrypted-media; fullscreen"
-                                    allowFullScreen
-                                    title="Player"
-                                />
+                                <View style={{ width: '100%', height: '100%', position: 'relative' }}>
+                                    <iframe
+                                        ref={iframeRef}
+                                        key={`${server}-${selectedSeason}-${selectedEpisode}`}
+                                        src={getActiveServerUri()}
+                                        style={{ width: '100%', height: '100%', border: 'none' }}
+                                        allow="autoplay; encrypted-media; fullscreen; picture-in-picture"
+                                        allowFullScreen={true}
+                                        webkitallowfullscreen="true"
+                                        mozallowfullscreen="true"
+                                        title="Player"
+                                    />
+                                    {/* ONLY SHOW FULLSCREEN OVERRIDE FOR VIDSRC */}
+                                    {server === 'vidsrc' && (
+                                        <TouchableOpacity
+                                            style={[styles.desktopExpandBtn, { cursor: 'pointer' }]}
+                                            activeOpacity={0.8}
+                                            onPress={handleIframeFullscreen}
+                                        >
+                                            <Ionicons name="expand" size={20} color="#FFFFFF" />
+                                        </TouchableOpacity>
+                                    )}
+                                </View>
                             ) : (
                                 <WebView
                                     ref={webViewRef}
-                                    key={`vidlink-${selectedSeason}-${selectedEpisode}`}
-                                    source={{ uri: type === 'tv' ? `https://vidlink.pro/tv/${id}/${selectedSeason}/${selectedEpisode}?autoplay=1` : `https://vidlink.pro/movie/${id}?autoplay=1`, headers: { 'Referer': 'https://vidlink.pro/', 'User-Agent': DESKTOP_USER_AGENT } }}
+                                    key={`${server}-${selectedSeason}-${selectedEpisode}`}
+                                    source={{ uri: getActiveServerUri(), headers: { 'Referer': SERVERS[server].referer, 'User-Agent': DESKTOP_USER_AGENT } }}
                                     userAgent={DESKTOP_USER_AGENT}
                                     style={{ flex: 1, backgroundColor: '#000' }}
-                                    javaScriptEnabled={true} domStorageEnabled={true} allowsFullscreenVideo={false} mediaPlaybackRequiresUserAction={false} allowsInlineMediaPlayback={true} androidLayerType="hardware"
-                                    injectedJavaScriptBeforeContentLoaded={adBlockScript}
-                                    injectedJavaScript={`(function() { var style = document.createElement('style'); var css = 'iframe[src*="ads"], .ad-overlay { display: none !important; }'; css += '.pjs-fullscreen, .pjs-icon-fullscreen, [aria-label="Fullscreen"], [title="Fullscreen"], .fullscreen-btn { display: none !important; }'; style.innerHTML = css; document.head.appendChild(style); })(); true;`}
-                                    onShouldStartLoadWithRequest={(request) => request.url.includes('vidlink.pro') || request.url.includes('about:blank')}
+                                    javaScriptEnabled={true} domStorageEnabled={true} allowsFullscreenVideo={true} mediaPlaybackRequiresUserAction={false} allowsInlineMediaPlayback={true} androidLayerType="hardware"
+                                    injectedJavaScriptBeforeContentLoaded={adScript}
+                                    injectedJavaScript={injectedFallbackScript}
+                                    onMessage={(event) => { if (event.nativeEvent.data === 'FALLBACK_REQUEST') { handleServerFallback(); } }}
+                                    onHttpError={(syntheticEvent) => {
+                                        if (syntheticEvent.nativeEvent.statusCode >= 400 && syntheticEvent.nativeEvent.url.includes(SERVERS[server].host)) {
+                                            handleServerFallback();
+                                        }
+                                    }}
+                                    onError={() => handleServerFallback()}
+                                    onShouldStartLoadWithRequest={(request) => {
+                                        if (request.isTopFrame === false) return true;
+                                        return request.url.includes(SERVERS[server].host) || request.url.startsWith('about:blank');
+                                    }}
                                 />
                             )
                         ) : trailerKey ? (
@@ -525,6 +658,25 @@ export const VideoPlayerUI = (props) => {
                             )
                         )}
 
+                        {activeMediaView === 'movie' && !streamUrl && !ytId && (
+                            <View style={styles.tvControlsContainer}>
+                                <Text style={styles.tvControlsLabel}>Server</Text>
+                                <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.tvControlsRow}>
+                                    <TouchableOpacity style={[styles.tvChip, server === 'vidlink' && styles.tvChipActive]} onPress={() => setServer('vidlink')}>
+                                        <Text style={[styles.tvChipText, server === 'vidlink' && styles.tvChipTextActive]}>{SERVERS.vidlink.label}</Text>
+                                    </TouchableOpacity>
+
+                                    <TouchableOpacity style={[styles.tvChip, server === 'filmu' && styles.tvChipActive]} onPress={() => setServer('filmu')}>
+                                        <Text style={[styles.tvChipText, server === 'filmu' && styles.tvChipTextActive]}>{SERVERS.filmu.label}</Text>
+                                    </TouchableOpacity>
+
+                                    <TouchableOpacity style={[styles.tvChip, server === 'vidsrc' && styles.tvChipActive]} onPress={() => setServer('vidsrc')}>
+                                        <Text style={[styles.tvChipText, server === 'vidsrc' && styles.tvChipTextActive]}>{SERVERS.vidsrc.label}</Text>
+                                    </TouchableOpacity>
+                                </ScrollView>
+                            </View>
+                        )}
+
                         {activeMediaView === 'movie' && type === 'tv' && tvSeasons.length > 0 && !streamUrl && (
                             <View style={styles.tvControlsContainer}>
                                 <Text style={styles.tvControlsLabel}>Select Season</Text>
@@ -546,7 +698,7 @@ export const VideoPlayerUI = (props) => {
                             </View>
                         )}
 
-                        {activeMediaView === 'movie' && !streamUrl && !ytId && isVidkingAvailable && (
+                        {activeMediaView === 'movie' && !streamUrl && !ytId && isVidkingAvailable && server === 'vidlink' && (
                             <TouchableOpacity
                                 style={styles.watchToggleBtn} activeOpacity={0.8}
                                 onPress={() => {
@@ -586,7 +738,6 @@ const styles = StyleSheet.create({
     desktopBackBtn: { width: 44, height: 44, borderRadius: 22, backgroundColor: 'rgba(255,255,255,0.08)', justifyContent: 'center', alignItems: 'center', marginBottom: 24, cursor: 'pointer', borderWidth: 1, borderColor: 'rgba(255,255,255,0.1)' },
     desktopLayout: { flex: 1, flexDirection: 'row', gap: 40 },
 
-    // LEFT COLUMN: Video Player
     desktopPlayerCol: {
         flex: 1,
         minHeight: 450,
@@ -603,7 +754,6 @@ const styles = StyleSheet.create({
     },
     desktopPlayerWrapper: { width: '100%', height: '100%', position: 'relative' },
 
-    // RIGHT COLUMN: Details
     desktopDetailsCol: { width: 420, flexShrink: 0 },
 
     desktopMediaTitle: { color: '#FFFFFF', fontSize: 40, fontWeight: '900', marginBottom: 16, lineHeight: 46, letterSpacing: 0.5 },

@@ -1,1 +1,5 @@
-/*    /index.html   200
+/tabs/home     /home     301
+/tabs/search   /search   301
+/tabs/profile  /profile  301
+
+/*             /index.html   200

@@ -221,6 +221,77 @@ const FloatingMessage = ({ msg, onComplete }) => {
 
 const CHAT_PANEL_RATIO = 0.5;
 
+// ---------------------------------------------------------------------------
+// SyncStatusBar — replaces the old VidLinkOverlay block layer entirely.
+//
+// Joinees now have FULL, unobstructed control of their own VidLink player —
+// nothing sits on top of it anymore. This bar just shows where they are
+// (gradient fill) vs. where the host is (gold marker), and a pill button
+// that turns green when within the sync threshold and red when drifted,
+// which the joinee can tap to explicitly jump to the host's live position.
+// It never touches the player on its own.
+// ---------------------------------------------------------------------------
+const formatSyncTime = (secs) => {
+    if (!isFinite(secs) || secs < 0) return '0:00';
+    const m = Math.floor(secs / 60);
+    const s = Math.floor(secs % 60);
+    return `${m}:${s.toString().padStart(2, '0')}`;
+};
+
+// visible: hover (desktop) / tap-to-reveal (mobile), OR a transient pause event —
+// the bar renders NOTHING when not visible, so it never sits over the player
+// by default. isPausedBadge overrides the label to "Host paused at X" for ~2s.
+const SyncStatusBar = ({ myFraction, hostFraction, inSync, driftSeconds, onSync, compact, visible, isPausedBadge, hostTime }) => {
+    if (!visible) return null;
+
+    const hasHostData = driftSeconds !== null && driftSeconds !== undefined;
+    const roundedDrift = hasHostData ? Math.round(Math.abs(driftSeconds)) : 0;
+
+    let label = 'Waiting for host…';
+    let buttonColor = 'rgba(143,152,160,0.85)';
+    let iconName = 'time-outline';
+
+    if (isPausedBadge) {
+        label = `Host paused at ${formatSyncTime(hostTime)}`;
+        buttonColor = 'rgba(255,179,0,0.94)';
+        iconName = 'pause-circle';
+    } else if (hasHostData) {
+        if (inSync) {
+            label = 'In Sync';
+            buttonColor = 'rgba(46,204,113,0.92)';
+            iconName = 'checkmark-circle';
+        } else {
+            label = `${roundedDrift}s ${driftSeconds >= 0 ? 'ahead' : 'behind'} • Tap to Sync`;
+            buttonColor = 'rgba(229,57,53,0.92)';
+            iconName = 'sync';
+        }
+    }
+
+    // The gold reference marker only matters while you're actually drifted —
+    // once in sync it would just sit on top of your own fill, so hide it.
+    const showHostMarker = hasHostData && !inSync && !isPausedBadge;
+
+    return (
+        <View style={[styles.syncBarWrapper, compact && styles.syncBarWrapperCompact]} pointerEvents="box-none">
+            <View style={styles.syncTrack} pointerEvents="none">
+                <View style={[styles.syncTrackFill, { width: `${Math.min(100, Math.max(0, myFraction * 100))}%` }]} />
+                {showHostMarker && (
+                    <View style={[styles.syncHostMarker, { left: `${Math.min(100, Math.max(0, hostFraction * 100))}%` }]} />
+                )}
+            </View>
+            <TouchableOpacity
+                style={[styles.syncButton, { backgroundColor: buttonColor }]}
+                onPress={onSync}
+                disabled={!hasHostData}
+                activeOpacity={0.8}
+            >
+                <Ionicons name={iconName} size={compact ? 13 : 14} color="#FFF" />
+                <Text style={[styles.syncButtonText, compact && { fontSize: 11 }]} numberOfLines={1}>{label}</Text>
+            </TouchableOpacity>
+        </View>
+    );
+};
+
 export default function TheatreScreen() {
     const { width, height } = useWindowDimensions();
     const isDesktop = width >= 1024;
@@ -228,6 +299,13 @@ export default function TheatreScreen() {
     const logic = useTheatreLogic(width, height, isDesktop);
     const [desktopPlayerWidth, setDesktopPlayerWidth] = useState(0);
     const [isPlayerHovered, setIsPlayerHovered] = useState(false);
+
+    const buildVidLinkSrc = ({ type, id, season, episode, time, autoplay }) => {
+        const base = type === 'tv'
+            ? `https://vidlink.pro/tv/${id}/${season}/${episode}`
+            : `https://vidlink.pro/movie/${id}`;
+        return `${base}?autoplay=${autoplay ? 'true' : 'false'}&startAt=${Math.floor(time)}`;
+    };
 
     useEffect(() => {
         if (Platform.OS === 'web' && typeof document !== 'undefined') {
@@ -282,11 +360,6 @@ export default function TheatreScreen() {
         }
     };
 
-    // NOTE: This renderer is used only by the MOBILE/TABLET portrait bottom "Chat" tab.
-    // The desktop layout uses <TheatreChatPanel /> directly (untouched) and the fullscreen
-    // slide-in panel also uses <TheatreChatPanel /> (untouched, already tags senders).
-    // FIX: every message row now shows a sender tag ("You" for your own messages, the
-    // sender's name for others) for BOTH text messages and GIFs, matching the fullscreen panel.
     const renderChatMessage = ({ item }) => {
         if (item.isReaction) {
             return (
@@ -332,6 +405,9 @@ export default function TheatreScreen() {
     const innerVideoWidth = Math.min(containerWidth, containerHeight * (16 / 9));
     const innerVideoHeight = innerVideoWidth * (9 / 16);
 
+    // Show the sync bar only to joinees watching VidLink content.
+    const showSyncBar = !!logic.ytId && logic.isVidLink && !logic.isHostLocal;
+
     let episodesArray = [];
     let tvSeasons = [];
     if (logic.tvDetails && logic.tvDetails.seasons) {
@@ -369,7 +445,6 @@ export default function TheatreScreen() {
 
     // --------------------------------------------------------
     // DESKTOP LAYOUT (Split Screen Widescreen Watch Party)
-    // UNTOUCHED — exactly as before.
     // --------------------------------------------------------
     if (isDesktop) {
         const desktopVideoHeight = logic.isFullScreen ? height : height * 0.65;
@@ -418,32 +493,21 @@ export default function TheatreScreen() {
                             {logic.isVidLink ? (
                                 <View style={{ width: '100%', height: '100%', backgroundColor: '#000', borderRadius: logic.isFullScreen ? 0 : 16, overflow: 'hidden', position: 'relative' }}>
                                     <iframe
-                                        key={`vidlink-desktop-${logic.vidLinkId}-${logic.vidLinkSeason}-${logic.vidLinkEpisode}-${logic.vidLinkResync.nonce}`}
                                         ref={logic.webViewRef}
-                                        src={
-                                            (logic.vidLinkType === 'tv'
-                                                ? `https://vidlink.pro/tv/${logic.vidLinkId}/${logic.vidLinkSeason}/${logic.vidLinkEpisode}`
-                                                : `https://vidlink.pro/movie/${logic.vidLinkId}`) +
-                                            `?autoplay=${logic.vidLinkResync.autoplay ? 1 : 0}&startAt=${Math.floor(logic.vidLinkResync.time)}`
-                                        }
+                                        key={`vidlink-mobile-${logic.vidLinkId}-${logic.vidLinkSeason}-${logic.vidLinkEpisode}-${logic.vidLinkResync.nonce}`}
+                                        src={buildVidLinkSrc({
+                                            type: logic.vidLinkType,
+                                            id: logic.vidLinkId,
+                                            season: logic.vidLinkSeason,
+                                            episode: logic.vidLinkEpisode,
+                                            time: logic.vidLinkResync.time,
+                                            autoplay: logic.vidLinkResync.autoplay
+                                        })}
                                         style={{ width: '100%', height: '100%', border: 'none' }}
                                         allow="autoplay; encrypted-media; fullscreen"
                                         allowFullScreen
                                         title="Player"
                                     />
-
-                                    {/* Blocks joinees from clicking/scrubbing vidlink's own controls */}
-                                    {!logic.isHostLocal && (
-                                        <View pointerEvents="auto" style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, zIndex: 40 }} />
-                                    )}
-
-                                    {/* Shown instead of trying to actually stop playback (can't command vidlink) */}
-                                    {!logic.isHostLocal && logic.vidLinkHostPaused && (
-                                        <View style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(0,0,0,0.6)', justifyContent: 'center', alignItems: 'center', zIndex: 45 }}>
-                                            <Ionicons name="pause-circle" size={40} color="#FFF" style={{ marginBottom: 8 }} />
-                                            <Text style={{ color: '#FFF', fontWeight: 'bold', fontSize: 15 }}>Paused by host</Text>
-                                        </View>
-                                    )}
                                 </View>
                             ) : (
                                 <View style={{ width: '100%', height: '100%', justifyContent: 'center', alignItems: 'center' }}>
@@ -479,6 +543,22 @@ export default function TheatreScreen() {
                                     <FloatingMessage key={msg.id} msg={msg} onComplete={() => logic.removeFloatingMessage(msg.id)} />
                                 ))}
                             </View>
+
+                            {/* Sync status bar — joinees only, VidLink only. Hidden by default; only
+                                appears on hover, or briefly when the host pauses. Never blocks the player. */}
+                            {showSyncBar && (
+                                <SyncStatusBar
+                                    myFraction={logic.myProgressFraction}
+                                    hostFraction={logic.hostProgressFraction}
+                                    inSync={logic.vidLinkInSync}
+                                    driftSeconds={logic.vidLinkDriftSeconds}
+                                    onSync={logic.handleSyncToHost}
+                                    compact={false}
+                                    visible={isPlayerHovered || logic.showPausedBadge}
+                                    isPausedBadge={logic.showPausedBadge}
+                                    hostTime={logic.hostProgressTime}
+                                />
+                            )}
 
                             {/* Exit-fullscreen affordance */}
                             {logic.isFullScreen && (
@@ -735,8 +815,6 @@ export default function TheatreScreen() {
 
     // --------------------------------------------------------
     // MOBILE & TABLET LAYOUT (native app + mobile/tablet webview)
-    // FIXED: fullscreen chat slider no longer shows a black screen
-    // for either the YouTube player OR the VidLink/movie player.
     // --------------------------------------------------------
     return (
         <SafeAreaView style={styles.safeArea} edges={logic.isFullScreen ? [] : ['top', 'left', 'right']}>
@@ -780,34 +858,22 @@ export default function TheatreScreen() {
                         {logic.isVidLink ? (
                             <View style={{ width: innerVideoWidth, height: innerVideoHeight, backgroundColor: '#000', position: 'relative' }}>
                                 {Platform.OS === 'web' ? (
-                                    <>
-                                        <iframe
-                                            ref={logic.webViewRef}
-                                            key={`vidlink-mobile-${logic.vidLinkId}-${logic.vidLinkSeason}-${logic.vidLinkEpisode}-${logic.vidLinkResync.nonce}`}
-                                            src={
-                                                (logic.vidLinkType === 'tv'
-                                                    ? `https://vidlink.pro/tv/${logic.vidLinkId}/${logic.vidLinkSeason}/${logic.vidLinkEpisode}`
-                                                    : `https://vidlink.pro/movie/${logic.vidLinkId}`) +
-                                                `?autoplay=${logic.vidLinkResync.autoplay ? 1 : 0}&startAt=${Math.floor(logic.vidLinkResync.time)}`
-                                            }
-                                            style={{ width: '100%', height: '100%', border: 'none' }}
-                                            allow="autoplay; encrypted-media; fullscreen"
-                                            allowFullScreen
-                                            title="Player"
-                                        />
-
-                                        {/* Blocks joinees from clicking/scrubbing vidlink's own controls */}
-                                        {!logic.isHostLocal && (
-                                            <View pointerEvents="auto" style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, zIndex: 40 }} />
-                                        )}
-
-                                        {!logic.isHostLocal && logic.vidLinkHostPaused && (
-                                            <View style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(0,0,0,0.6)', justifyContent: 'center', alignItems: 'center', zIndex: 45 }}>
-                                                <Ionicons name="pause-circle" size={36} color="#FFF" style={{ marginBottom: 6 }} />
-                                                <Text style={{ color: '#FFF', fontWeight: 'bold', fontSize: 14 }}>Paused by host</Text>
-                                            </View>
-                                        )}
-                                    </>
+                                    <iframe
+                                        ref={logic.webViewRef}
+                                        key={`vidlink-mobile-${logic.vidLinkId}-${logic.vidLinkSeason}-${logic.vidLinkEpisode}-${logic.vidLinkResync.nonce}`}
+                                        src={buildVidLinkSrc({
+                                            type: logic.vidLinkType,
+                                            id: logic.vidLinkId,
+                                            season: logic.vidLinkSeason,
+                                            episode: logic.vidLinkEpisode,
+                                            time: logic.vidLinkResync.time,
+                                            autoplay: logic.vidLinkResync.autoplay
+                                        })}
+                                        style={{ width: '100%', height: '100%', border: 'none' }}
+                                        allow="autoplay; encrypted-media; fullscreen"
+                                        allowFullScreen
+                                        title="Player"
+                                    />
                                 ) : (
                                     <WebView
                                         ref={logic.webViewRef}
@@ -855,26 +921,7 @@ export default function TheatreScreen() {
                     style.innerHTML = css;
                     document.head.appendChild(style);
 
-                    window.__isJoinee = ${!logic.isHostLocal};
-
-                    var lockCss = '.pjs-play, .pjs-pause, .pjs-icon-play, .pjs-icon-pause, .pjs-slider, .pjs-progress, .pjs-time, .pjs-rewind, .pjs-forward, .pjs-skip, .pjs-next, .pjs-previous, .pjs-servers, .pjs-playlist, .server-wrapper, .server-list, .servers, .list-server { pointer-events: none !important; opacity: 0.5 !important; } .pjs-video-wrapper, video { pointer-events: none !important; }';
-
-                    function applyLock() {
-                        if (document.getElementById('joinee-lock')) return;
-                        var lock = document.createElement('style');
-                        lock.id = 'joinee-lock';
-                        lock.innerHTML = lockCss;
-                        document.head.appendChild(lock);
-                    }
-                    function removeLock() {
-                        var lock = document.getElementById('joinee-lock');
-                        if (lock) lock.remove();
-                    }
-
-                    window.__promoteToHost = function() { window.__isJoinee = false; removeLock(); };
-                    window.__demoteToJoinee = function() { window.__isJoinee = true; applyLock(); };
-                    if (window.__isJoinee) applyLock();
-
+                    // Joinees now have full free control of their own player — no lock CSS.
                     var sendMsg = window.__rn_send || (window.ReactNativeWebView ? window.ReactNativeWebView.postMessage.bind(window.ReactNativeWebView) : null);
 
                     if (!window.__syncStarted) {
@@ -889,20 +936,19 @@ export default function TheatreScreen() {
                                 }
                             }
 
-                            if (window.__isJoinee) return;
-
                             if (v && sendMsg) {
                                 var isPlaying = !v.paused && !v.ended && v.readyState > 2;
                                 var time = v.currentTime;
+                                var dur = isFinite(v.duration) ? v.duration : 0;
                                 if (isPlaying !== lastState.playing) {
                                     lastState.playing = isPlaying;
-                                    sendMsg(JSON.stringify({ type: 'PLAYER_EVENT', data: { event: isPlaying ? 'play' : 'pause', currentTime: time } }));
+                                    sendMsg(JSON.stringify({ type: 'PLAYER_EVENT', data: { event: isPlaying ? 'play' : 'pause', currentTime: time, duration: dur } }));
                                 }
                                 if (Math.abs(time - lastState.time) > 1.5 && lastState.playing === isPlaying) {
-                                    sendMsg(JSON.stringify({ type: 'PLAYER_EVENT', data: { event: 'seeked', currentTime: time } }));
+                                    sendMsg(JSON.stringify({ type: 'PLAYER_EVENT', data: { event: 'seeked', currentTime: time, duration: dur } }));
                                 }
                                 lastState.time = time;
-                                sendMsg(JSON.stringify({ type: 'PLAYER_EVENT', data: { event: 'timeupdate', currentTime: time } }));
+                                sendMsg(JSON.stringify({ type: 'PLAYER_EVENT', data: { event: 'timeupdate', currentTime: time, duration: dur } }));
                             }
                         }, 1000);
                     }
@@ -921,6 +967,23 @@ export default function TheatreScreen() {
                                 )}
                                 {!logic.overlayVisible && (
                                     <TouchableOpacity style={styles.fsWakeHotspot} onPress={logic.wakeVidLinkOverlay} activeOpacity={1} />
+                                )}
+
+                                {/* Sync status bar — joinees only, VidLink only. Hidden by default; only
+                                    appears when the player controls are tapped-visible, or briefly when
+                                    the host pauses. Never blocks the player. */}
+                                {showSyncBar && (
+                                    <SyncStatusBar
+                                        myFraction={logic.myProgressFraction}
+                                        hostFraction={logic.hostProgressFraction}
+                                        inSync={logic.vidLinkInSync}
+                                        driftSeconds={logic.vidLinkDriftSeconds}
+                                        onSync={logic.handleSyncToHost}
+                                        compact={true}
+                                        visible={logic.overlayVisible || logic.showPausedBadge}
+                                        isPausedBadge={logic.showPausedBadge}
+                                        hostTime={logic.hostProgressTime}
+                                    />
                                 )}
                             </View>
                         ) : (
@@ -1000,22 +1063,6 @@ export default function TheatreScreen() {
                         </Animated.View>
                     )}
 
-                    {/*
-                        CHAT SLIDE-IN PANEL — THE FIX.
-                        1. renderToHardwareTextureAndroid + needsOffscreenAlphaCompositing:
-                           forces this animated, semi-transparent overlay onto its own
-                           hardware layer on Android so it composites correctly above the
-                           YoutubePlayer WebView / VidLink WebView surface instead of
-                           painting black.
-                        2. Explicit zIndex/elevation HIGHER than every other layer
-                           (video = 1, overlay buttons = 100000-100001) so ordering can
-                           never be ambiguous on either platform.
-                        3. `isolation: 'isolate'` (web only) guarantees this view creates
-                           its own stacking context on top of the <iframe>/<WebView>
-                           beneath it, which some browsers otherwise stack unpredictably.
-                        This works identically for the YouTube player AND the VidLink
-                        movie/TV player since both just live inside the video layer below.
-                    */}
                     {logic.chatPanelRendered && logic.isFullScreen && (
                         <Animated.View
                             style={[
@@ -1738,4 +1785,59 @@ const styles = StyleSheet.create({
     desktopResultCard: { width: 200, cursor: 'pointer' },
     desktopResultImage: { width: '100%', height: 112, borderRadius: 10, backgroundColor: '#25252A' },
     desktopResultTitle: { color: '#E6E6EA', fontSize: 13, marginTop: 10, fontWeight: '600' },
+
+    // --- SYNC STATUS BAR (new) ---
+    syncBarWrapper: {
+        // Anchored to the TOP of the player, not the bottom — VidLink's own
+        // play/pause/seek/skip controls live at the bottom, so this stays
+        // clear of them entirely regardless of that player's own layout.
+        position: 'absolute',
+        left: 16,
+        right: 16,
+        top: 56,
+        zIndex: 99997,
+        gap: 6,
+    },
+    syncBarWrapperCompact: {
+        left: 10,
+        right: 10,
+        top: 50,
+    },
+    syncTrack: {
+        height: 6,
+        borderRadius: 3,
+        backgroundColor: 'rgba(255,255,255,0.18)',
+        overflow: 'visible',
+        position: 'relative',
+    },
+    syncTrackFill: {
+        position: 'absolute',
+        left: 0, top: 0, bottom: 0,
+        borderRadius: 3,
+        backgroundColor: '#00E5FF',
+    },
+    syncHostMarker: {
+        position: 'absolute',
+        top: -4,
+        width: 3,
+        height: 14,
+        borderRadius: 2,
+        backgroundColor: '#FFD700',
+        marginLeft: -1.5,
+    },
+    syncButton: {
+        alignSelf: 'center',
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 6,
+        paddingHorizontal: 12,
+        paddingVertical: 7,
+        borderRadius: 16,
+        maxWidth: '100%',
+    },
+    syncButtonText: {
+        color: '#FFF',
+        fontSize: 12,
+        fontWeight: '700',
+    },
 });

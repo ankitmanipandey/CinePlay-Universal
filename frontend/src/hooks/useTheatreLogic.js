@@ -16,10 +16,11 @@ const OVERLAY_FADE_OUT_MS = 300;
 const VIDLINK_OVERLAY_HIDE_MS = 4000;
 
 // vidlink.pro only emits telemetry via postMessage; it does not accept inbound
-// commands. Any resync on web is done by reloading the iframe with ?startAt=.
+// commands. We no longer force joinees to reload automatically — joinees have
+// free control of their own player and can optionally tap "Sync to Host".
 const VIDLINK_ORIGIN_SUBSTRING = 'vidlink.pro';
-const VIDLINK_DRIFT_THRESHOLD_SEC = 4;
-const VIDLINK_RESYNC_COOLDOWN_MS = 8000;
+const IN_SYNC_THRESHOLD_SEC = 5;
+const MAX_PLAUSIBLE_VIDLINK_SECONDS = 24 * 60 * 60; // Sanity check for drift/epoch bugs (24h max)
 
 const RAW_KEYS = process.env.EXPO_PUBLIC_YOUTUBE_API_KEYS || process.env.EXPO_PUBLIC_YOUTUBE_API_KEY || '';
 let ACTIVE_YT_KEYS = RAW_KEYS.split(',').map(k => k.trim()).filter(Boolean);
@@ -82,20 +83,45 @@ export const useTheatreLogic = (width, height, isDesktop) => {
     const isPlayingRef = useRef(startWithInitial);
     const webViewRef = useRef(null);
     const vidLinkTimeRef = useRef(0);
+
     const lastVidLinkEmitRef = useRef(0);
     const isVidLinkRef = useRef(false);
 
-    // --- web-only vidlink resync state ---
-    // localVidLinkTimeRef tracks THIS device's own iframe position, reported
-    // back to us via vidlink's own outward telemetry (postMessage).
+    // --- web-only vidlink resync state (manual, user-initiated only) ---
     const localVidLinkTimeRef = useRef(0);
-    const resyncCooldownUntilRef = useRef(0);
-    // vidLinkResync drives the iframe's src/key on web. Bumping `nonce` forces
-    // a full remount (= reload) even if `time` happens to repeat.
+    const telemetryIgnoreUntilRef = useRef(0);
+
     const [vidLinkResync, setVidLinkResync] = useState({ time: 0, autoplay: true, nonce: 0 });
-    // Shown to non-hosts on web while the host has paused, instead of trying
-    // to actually stop vidlink's playback (which we can't command).
-    const [vidLinkHostPaused, setVidLinkHostPaused] = useState(false);
+
+    // --- NEW: informational progress tracking (no forced control) ---
+    // myProgress: this device's own player position/duration/playing-state, from its own telemetry.
+    // hostProgress: the host's last-broadcast position, used only to show a marker + drift, never to force anything.
+    const [myProgress, setMyProgress] = useState({ time: 0, duration: 0, isPlaying: true, updatedAt: 0 });
+    const [hostProgress, setHostProgress] = useState({ time: 0, isPlaying: true, updatedAt: 0 });
+    const myProgressRef = useRef(myProgress);
+    const hostProgressRef = useRef(hostProgress);
+    useEffect(() => { myProgressRef.current = myProgress; }, [myProgress]);
+    useEffect(() => { hostProgressRef.current = hostProgress; }, [hostProgress]);
+
+    // Transient "Host paused at X" badge — pops up briefly whenever the host
+    // pauses, then auto-hides after 2s, independent of hover/tap state.
+    const [showPausedBadge, setShowPausedBadge] = useState(false);
+    const prevHostPlayingRef = useRef(true);
+    const pausedBadgeTimerRef = useRef(null);
+    useEffect(() => {
+        if (!hostProgress.updatedAt) { prevHostPlayingRef.current = hostProgress.isPlaying; return; }
+        if (prevHostPlayingRef.current && !hostProgress.isPlaying) {
+            setShowPausedBadge(true);
+            if (pausedBadgeTimerRef.current) clearTimeout(pausedBadgeTimerRef.current);
+            pausedBadgeTimerRef.current = setTimeout(() => setShowPausedBadge(false), 2000);
+        }
+        prevHostPlayingRef.current = hostProgress.isPlaying;
+    }, [hostProgress.isPlaying, hostProgress.updatedAt]);
+    useEffect(() => () => { if (pausedBadgeTimerRef.current) clearTimeout(pausedBadgeTimerRef.current); }, []);
+
+    // Ticks once a second while a vidlink video is active, purely to re-render
+    // extrapolated positions/drift smoothly. Cheap — just a re-render trigger.
+    const [, setSyncTick] = useState(0);
 
     const [searchType, setSearchType] = useState('youtube');
     const [searchInput, setSearchInput] = useState('');
@@ -178,10 +204,37 @@ export const useTheatreLogic = (width, height, isDesktop) => {
         else playerRef.current?.extendControls?.();
     }, [wakeVidLinkOverlay]);
 
+    // Updates this device's OWN progress from its own player telemetry, and —
+    // only if this device is the host — broadcasts it to the room. Joinees run
+    // this too now (for their own progress bar / drift calc) but never emit
+    // sync_action, and nothing here ever forces their player to do anything.
     const handleVidLinkPlayerEvent = useCallback((eventData) => {
         if (!eventData) return;
-        const { event: evt, currentTime } = eventData;
-        if (typeof currentTime === 'number') vidLinkTimeRef.current = currentTime;
+        // Swallow telemetry entirely for a short window right after a manual
+        // "Sync to Host" reload — the freshly (re)loaded iframe briefly reports
+        // stale/incorrect positions (often 0, or its own saved progress) before
+        // real playback telemetry resumes. Without this, the progress bar jumps
+        // to the host's position and then immediately snaps back.
+        if (Date.now() < telemetryIgnoreUntilRef.current) return;
+        const { event: evt, currentTime, duration } = eventData;
+
+        // Guard against epoch-timestamp / garbage drift bugs
+        if (typeof currentTime === 'number' && currentTime >= 0 && currentTime < MAX_PLAUSIBLE_VIDLINK_SECONDS) {
+            vidLinkTimeRef.current = currentTime;
+        } else {
+            return; // drop this telemetry tick entirely
+        }
+
+        const nowMs = Date.now();
+        const nextIsPlaying = evt === 'play' ? true : evt === 'pause' ? false : myProgressRef.current.isPlaying;
+        const nextProgress = {
+            time: currentTime,
+            duration: (typeof duration === 'number' && duration > 0) ? duration : myProgressRef.current.duration,
+            isPlaying: nextIsPlaying,
+            updatedAt: nowMs,
+        };
+        myProgressRef.current = nextProgress;
+        setMyProgress(nextProgress);
 
         if (!isHostRef.current || !socket) return;
 
@@ -202,11 +255,6 @@ export const useTheatreLogic = (width, height, isDesktop) => {
         }
     }, [socket, roomId]);
 
-    // --- web-only listener for vidlink.pro's own outward telemetry ---
-    // vidlink.pro posts messages to whatever page embeds it (postMessage is
-    // designed to cross origins for exactly this). No injection needed here —
-    // this works for BOTH the host (to capture their actions) and the joinee
-    // (to know this device's own current position, for drift comparisons).
     useEffect(() => {
         if (Platform.OS !== 'web' || !isVidLink) return;
 
@@ -215,7 +263,7 @@ export const useTheatreLogic = (width, height, isDesktop) => {
             const msg = event.data;
             if (!msg || msg.type !== 'PLAYER_EVENT' || !msg.data) return;
 
-            if (typeof msg.data.currentTime === 'number') {
+            if (typeof msg.data.currentTime === 'number' && Date.now() >= telemetryIgnoreUntilRef.current) {
                 localVidLinkTimeRef.current = msg.data.currentTime;
             }
             handleVidLinkPlayerEvent(msg.data);
@@ -225,9 +273,10 @@ export const useTheatreLogic = (width, height, isDesktop) => {
         return () => window.removeEventListener('message', onWindowMessage);
     }, [isVidLink, handleVidLinkPlayerEvent]);
 
+    // Direct DOM manipulation of the underlying <video> element inside the
+    // native WebView (same-origin, so this actually works reliably — unlike
+    // the cross-origin <iframe> on web, which we can't reach into at all).
     const applyVidLinkRemoteSync = useCallback((data) => {
-        // Native-only path (kept exactly as-is; native sync is handled in the
-        // other repo per current scope, this just avoids touching it).
         if (!webViewRef.current) return;
         const t = typeof data.timestamp === 'number' ? data.timestamp : 0;
         const shouldPlay = data.action !== 'pause';
@@ -241,7 +290,7 @@ export const useTheatreLogic = (width, height, isDesktop) => {
                     }
                 }
                 if (v) {
-                    if (Math.abs(v.currentTime - ${t}) > 2) { v.currentTime = ${t}; }
+                    if (Math.abs(v.currentTime - ${t}) > 1) { v.currentTime = ${t}; }
                     if (${shouldPlay}) {
                         var playPromise = v.play();
                         if (playPromise !== undefined) {
@@ -254,6 +303,29 @@ export const useTheatreLogic = (width, height, isDesktop) => {
         `;
         webViewRef.current.injectJavaScript(js);
     }, []);
+
+    // Manual, explicit "Sync to Host" action — the ONLY thing that ever moves
+    // a joinee's playback now. On web this does one deliberate iframe reload
+    // with startAt; on native it directly seeks the real <video> element
+    // (no reload needed there).
+    const handleSyncToHost = useCallback(() => {
+        if (isHostRef.current) return;
+        const hp = hostProgressRef.current;
+        if (!hp.updatedAt) return;
+        const now = Date.now();
+        const targetTime = hp.isPlaying ? hp.time + Math.max(0, (now - hp.updatedAt) / 1000) : hp.time;
+
+        if (Platform.OS === 'web') {
+            telemetryIgnoreUntilRef.current = now + 5000;
+            localVidLinkTimeRef.current = targetTime;
+            const nextMy = { ...myProgressRef.current, time: targetTime, isPlaying: hp.isPlaying, updatedAt: now };
+            myProgressRef.current = nextMy;
+            setMyProgress(nextMy);
+            setVidLinkResync(prev => ({ time: targetTime, autoplay: hp.isPlaying, nonce: prev.nonce + 1 }));
+        } else {
+            applyVidLinkRemoteSync({ action: hp.isPlaying ? 'play' : 'pause', timestamp: targetTime });
+        }
+    }, [applyVidLinkRemoteSync]);
 
     useEffect(() => {
         if (ytId) {
@@ -277,6 +349,14 @@ export const useTheatreLogic = (width, height, isDesktop) => {
     }, [isVidLink, vidLinkType, vidLinkId]);
 
     useEffect(() => { isPlayingRef.current = isPlaying; }, [isPlaying]);
+
+    // Re-render every second while a vidlink video is up, so the sync bar's
+    // extrapolated positions/drift stay live without a forced reload of anything.
+    useEffect(() => {
+        if (!isVidLink) return;
+        const id = setInterval(() => setSyncTick(t => t + 1), 1000);
+        return () => clearInterval(id);
+    }, [isVidLink]);
 
     useEffect(() => {
         if (Platform.OS !== 'web') {
@@ -310,16 +390,12 @@ export const useTheatreLogic = (width, height, isDesktop) => {
             if (isHostRef.current === nowHost) return;
             isHostRef.current = nowHost;
             setIsHostLocal(nowHost);
-            if (nowHost) setVidLinkHostPaused(false);
-            if (!nowHost) webViewRef.current?.injectJavaScript && webViewRef.current.injectJavaScript('window.__demoteToJoinee && window.__demoteToJoinee(); true;');
         });
 
         newSocket.on('host_migrated', () => {
             isHostRef.current = true;
             setIsHostLocal(true);
             setIsMuted(false);
-            setVidLinkHostPaused(false);
-            webViewRef.current?.injectJavaScript && webViewRef.current.injectJavaScript('window.__promoteToHost && window.__promoteToHost(); true;');
             Toast.show({ type: 'hotstarSuccess', text1: 'You are the new Host!', text2: 'The previous host left. You now control the theatre.' });
         });
 
@@ -334,11 +410,13 @@ export const useTheatreLogic = (width, height, isDesktop) => {
             setVideoTitle(data.title);
             setIsPlaying(true);
             setIsMuted(true);
-            // Fresh video: reset local tracking so the very next remote_sync
-            // (which the server sends right after new_video) is treated as a
-            // real seek and reloads the iframe at the host's actual position.
             localVidLinkTimeRef.current = 0;
-            setVidLinkHostPaused(false);
+
+            hostProgressRef.current = { time: 0, isPlaying: true, updatedAt: 0 };
+            setHostProgress(hostProgressRef.current);
+            myProgressRef.current = { time: 0, duration: 0, isPlaying: true, updatedAt: 0 };
+            setMyProgress(myProgressRef.current);
+
             setVidLinkResync(prev => ({ time: 0, autoplay: true, nonce: prev.nonce + 1 }));
         });
 
@@ -358,45 +436,29 @@ export const useTheatreLogic = (width, height, isDesktop) => {
             if (isHostRef.current) setPendingRequests(prev => [...prev, data]);
         });
 
+        // ----------------------------------------------------
+        // remote_sync is now purely INFORMATIONAL for VidLink content.
+        // It updates hostProgress (used for the drift-status bar + marker)
+        // but never forces a joinee's player to reload, seek, play, or pause.
+        // The YouTube fallback below is unchanged — that player type still
+        // supports real inbound seekTo/play/pause, so it keeps hard sync.
+        // ----------------------------------------------------
         newSocket.on('remote_sync', (data) => {
-            if (isHostRef.current) return;
+            if (isHostRef.current || !data) return;
 
             if (isVidLinkRef.current) {
-                const hostIsPlaying = data.action !== 'pause';
-                setIsPlaying(hostIsPlaying);
-
-                if (Platform.OS === 'web') {
-                    const hostTime = typeof data.timestamp === 'number' ? data.timestamp : 0;
-                    const drift = Math.abs(hostTime - localVidLinkTimeRef.current);
-                    const pauseStateChanged = hostIsPlaying !== isPlayingRef.current;
-                    const now = Date.now();
-                    const inCooldown = now < resyncCooldownUntilRef.current;
-
-                    if (!hostIsPlaying) {
-                        setVidLinkHostPaused(true);
-                    } else if (!inCooldown && (pauseStateChanged || drift > VIDLINK_DRIFT_THRESHOLD_SEC)) {
-                        setVidLinkHostPaused(false);
-                        // Optimistic update — prevents the next heartbeat from comparing
-                        // against the stale pre-reload time while the new iframe is still
-                        // loading/buffering, which is what caused the reload-storm.
-                        localVidLinkTimeRef.current = hostTime;
-                        resyncCooldownUntilRef.current = now + VIDLINK_RESYNC_COOLDOWN_MS;
-                        setVidLinkResync(prev => ({
-                            time: hostTime,
-                            autoplay: true,
-                            nonce: prev.nonce + 1
-                        }));
-                    }
-                    // else: small drift, or within cooldown from a recent resync — ride it out.
-                } else {
-                    applyVidLinkRemoteSync(data);
-                }
+                const raw = typeof data.timestamp === 'number' ? data.timestamp : 0;
+                const t = (raw >= 0 && raw < MAX_PLAUSIBLE_VIDLINK_SECONDS) ? raw : hostProgressRef.current.time;
+                const nextHost = { time: t, isPlaying: data.action !== 'pause', updatedAt: Date.now() };
+                hostProgressRef.current = nextHost;
+                setHostProgress(nextHost);
                 return;
             }
 
+            // Fallback for YouTube — real player, real control, keep hard sync.
             playerRef.current?.getCurrentTime().then(viewerTime => {
-                const timeDiff = Math.abs(viewerTime - data.timestamp);
-                if (data.action === 'pause') {
+                const timeDiff = Math.abs(viewerTime - (data?.timestamp || 0));
+                if (data?.action === 'pause') {
                     setIsPlaying(false);
                     if (timeDiff > 0.3) playerRef.current?.seekTo(data.timestamp, true);
                 } else {
@@ -405,6 +467,7 @@ export const useTheatreLogic = (width, height, isDesktop) => {
                 }
             }).catch(() => { });
         });
+        // ----------------------------------------------------
 
         newSocket.on('receive_chat', (data) => {
             if (data.isReaction) {
@@ -429,7 +492,7 @@ export const useTheatreLogic = (width, height, isDesktop) => {
             newSocket.disconnect();
             if (Platform.OS !== 'web') ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.PORTRAIT_UP);
         };
-    }, [roomId, user?._id, token, initialYtId, initialTitle, applyVidLinkRemoteSync]);
+    }, [roomId, user?._id, token, initialYtId, initialTitle]);
 
     useEffect(() => {
         if (!isHostLocal || !socket || !ytId || isVidLink) return;
@@ -457,12 +520,6 @@ export const useTheatreLogic = (width, height, isDesktop) => {
                 setIsPlaying(false);
                 socket?.emit('sync_action', { roomId, action: 'pause', timestamp: currentTime });
             }
-            // 'buffering' is intentionally ignored here — it fires transiently
-            // during normal seeks (dragging the progress bar) and YouTube
-            // auto-resumes playback once buffering finishes on its own.
-            // Treating it as a pause (as this used to do) fights that
-            // auto-resume and forces the video to stick paused after every
-            // seek, for both the host's own player and every synced joinee.
         }).catch(() => { });
     };
 
@@ -549,7 +606,8 @@ export const useTheatreLogic = (width, height, isDesktop) => {
         setVideoTitle(selectedTitle);
         setIsPlaying(true);
         localVidLinkTimeRef.current = 0;
-        setVidLinkHostPaused(false);
+        myProgressRef.current = { time: 0, duration: 0, isPlaying: true, updatedAt: 0 };
+        setMyProgress(myProgressRef.current);
         setVidLinkResync(prev => ({ time: 0, autoplay: true, nonce: prev.nonce + 1 }));
         socket.emit('change_video', { roomId, ytId: selectedYtId, title: selectedTitle });
         Keyboard.dismiss();
@@ -560,7 +618,8 @@ export const useTheatreLogic = (width, height, isDesktop) => {
         const newYtId = `VIDLINK:tv:${vidLinkId}:${seasonNum}:1`;
         setYtId(newYtId);
         localVidLinkTimeRef.current = 0;
-        setVidLinkHostPaused(false);
+        myProgressRef.current = { time: 0, duration: 0, isPlaying: true, updatedAt: 0 };
+        setMyProgress(myProgressRef.current);
         setVidLinkResync(prev => ({ time: 0, autoplay: true, nonce: prev.nonce + 1 }));
         socket?.emit('change_video', { roomId, ytId: newYtId, title: videoTitle });
     };
@@ -570,7 +629,8 @@ export const useTheatreLogic = (width, height, isDesktop) => {
         const newYtId = `VIDLINK:tv:${vidLinkId}:${vidLinkSeason}:${epNum}`;
         setYtId(newYtId);
         localVidLinkTimeRef.current = 0;
-        setVidLinkHostPaused(false);
+        myProgressRef.current = { time: 0, duration: 0, isPlaying: true, updatedAt: 0 };
+        setMyProgress(myProgressRef.current);
         setVidLinkResync(prev => ({ time: 0, autoplay: true, nonce: prev.nonce + 1 }));
         socket?.emit('change_video', { roomId, ytId: newYtId, title: videoTitle });
     };
@@ -649,6 +709,21 @@ export const useTheatreLogic = (width, height, isDesktop) => {
         } catch (error) { Toast.show({ type: 'hotstarError', text1: 'Failed to send some invites.' }); }
     };
 
+    // ---- Derived, always-fresh sync numbers (recomputed each render / each tick) ----
+    const nowForSync = Date.now();
+    const hostExtrapolatedTime = hostProgress.updatedAt
+        ? (hostProgress.isPlaying ? hostProgress.time + Math.max(0, (nowForSync - hostProgress.updatedAt) / 1000) : hostProgress.time)
+        : 0;
+    const myExtrapolatedTime = myProgress.updatedAt
+        ? (myProgress.isPlaying ? myProgress.time + Math.max(0, (nowForSync - myProgress.updatedAt) / 1000) : myProgress.time)
+        : 0;
+    const vidLinkDriftSeconds = hostProgress.updatedAt ? (myExtrapolatedTime - hostExtrapolatedTime) : null; // + = ahead of host, - = behind
+    const vidLinkInSync = vidLinkDriftSeconds !== null && Math.abs(vidLinkDriftSeconds) <= IN_SYNC_THRESHOLD_SEC;
+    const myProgressFraction = myProgress.duration > 0 ? Math.min(1, Math.max(0, myExtrapolatedTime / myProgress.duration)) : 0;
+    const hostProgressFraction = (myProgress.duration > 0 && hostProgress.updatedAt)
+        ? Math.min(1, Math.max(0, hostExtrapolatedTime / myProgress.duration))
+        : null;
+
     return {
         router, roomId, isHostLocal, isJoining, isWaitingForHost, roomUsers,
         selectedUserToMod, setSelectedUserToMod, ytId, videoTitle, isPlaying,
@@ -662,7 +737,11 @@ export const useTheatreLogic = (width, height, isDesktop) => {
         vidLinkSeason, vidLinkEpisode, overlayTouchRef, overlayAnim, chatAnim,
         isGifPickerVisible, setIsGifPickerVisible, gifSearchQuery, setGifSearchQuery,
         gifs, isFetchingGifs, username, webViewRef, playerRef,
-        vidLinkResync, vidLinkHostPaused, // web resync state
+        vidLinkResync,
+        // NEW: sync status info for the SyncStatusBar UI
+        vidLinkDriftSeconds, vidLinkInSync, myProgressFraction, hostProgressFraction,
+        showPausedBadge, hostProgressTime: hostProgress.time,
+        handleSyncToHost,
         wakeVidLinkOverlay, extendOverlay, handleVidLinkPlayerEvent, applyVidLinkRemoteSync,
         onPlayerStateChange, sendReaction, removeReaction, removeFloatingMessage,
         toggleDistractionFree, handleVideoTap, sendChatText, sendGif, handleSendMessage,

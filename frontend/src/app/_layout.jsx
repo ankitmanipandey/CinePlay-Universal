@@ -248,8 +248,52 @@ export default function RootLayout() {
       isLoading: true
     });
     useMovieStore.getState().fetchAllData();
-    router.push('/tabs/home');
+    router.push('/home');
   };
+
+  const handleMusicPress = () => {
+    useMovieStore.setState({
+      filters: { region: 'all', type: 'music', language: 'any', platform: 'any' },
+      isLoading: true
+    });
+    useMovieStore.getState().fetchAllData();
+    router.push('/home');
+  };
+
+  // ========================================================
+  // NEW: SET FIXED BROWSER TAB TITLE & FAVICON (PLAY BUTTON)
+  // ========================================================
+  useEffect(() => {
+    if (Platform.OS === 'web') {
+      // 1. Set the fixed tab text
+      document.title = "CinePlay | Watch Movies, TV Shows, Listen Music";
+
+      // 2. Inject the custom Play Button Favicon (Gradient background, white play icon)
+      let link = document.querySelector("link[rel~='icon']");
+      if (!link) {
+        link = document.createElement('link');
+        link.rel = 'icon';
+        document.head.appendChild(link);
+      }
+
+      const faviconSvg = `
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 500 500">
+            <defs>
+                <linearGradient id="faviconGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+                    <stop offset="0%" stop-color="#00E5FF" />
+                    <stop offset="50%" stop-color="#9B51E0" />
+                    <stop offset="100%" stop-color="#FF007A" />
+                </linearGradient>
+            </defs>
+            <!-- Reduced radius to 235 to add a safe margin and prevent clipping -->
+            <circle cx="250" cy="250" r="235" fill="url(#faviconGrad)" />
+            <path d="M 190 145 L 365 250 L 190 355 Z" fill="#FFFFFF" stroke="#FFFFFF" stroke-width="25" stroke-linejoin="round" />
+        </svg>
+      `;
+
+      link.href = `data:image/svg+xml,${encodeURIComponent(faviconSvg.trim())}`;
+    }
+  }, []);
 
   useEffect(() => {
     const checkUserAuth = async () => {
@@ -258,7 +302,7 @@ export default function RootLayout() {
         let userDataString = Platform.OS === 'web' ? localStorage.getItem('userData') : await SecureStore.getItemAsync('userData');
         if (storedToken) {
           restoreSession(storedToken, userDataString ? JSON.parse(userDataString) : { email: 'User', name: 'User' });
-          router.replace('/tabs/home');
+          router.replace('/home');
         }
       } catch (error) { } finally { setIsLoading(false); }
     };
@@ -272,14 +316,15 @@ export default function RootLayout() {
       try {
         await TrackPlayer.setupPlayer();
         console.log('✅ TrackPlayer initialized');
-
-        // Commented out until we find the right argument shape:
-        // await TrackPlayer.setCommands([...]);
       } catch (e) {
         console.error('❌ TrackPlayer setup failed:', e);
       }
     })();
   }, []);
+
+  const handleDownloadApp = () => {
+    Linking.openURL('https://pub-5f899dbb416d45508db7a37ab6140585.r2.dev/Android%20apk/CinePlay.apk');
+  };
 
   if (isLoading) return (
     <LinearGradient colors={['#170D22', '#0A0A0C']} style={styles.loadingContainer}>
@@ -330,7 +375,8 @@ export default function RootLayout() {
                   </View>
 
                   <NavItem icon="home" label="Home" onPressOverride={handleHomePress} sidebarOpacity={sidebarOpacity} />
-                  <NavItem icon="search" label="Search" route="/tabs/search" router={router} sidebarOpacity={sidebarOpacity} />
+                  <NavItem icon="search" label="Search" route="/search" router={router} sidebarOpacity={sidebarOpacity} />
+                  <NavItem icon="musical-notes" label="Music" onPressOverride={handleMusicPress} sidebarOpacity={sidebarOpacity} />
                 </View>
 
                 <ScrollView
@@ -412,8 +458,14 @@ export default function RootLayout() {
                 </ScrollView>
 
                 <View style={styles.navRailBottom}>
+                  <NavItem
+                    icon="logo-android"
+                    label="Get App"
+                    onPressOverride={handleDownloadApp}
+                    sidebarOpacity={sidebarOpacity}
+                  />
                   <NavItem icon="bookmark" label="My List" route="/my-list" router={router} sidebarOpacity={sidebarOpacity} />
-                  <NavItem icon="person-circle" label="My Space" route="/tabs/profile" router={router} sidebarOpacity={sidebarOpacity} />
+                  <NavItem icon="person-circle" label="My Space" route="/profile" router={router} sidebarOpacity={sidebarOpacity} />
                 </View>
               </Pressable>
             </Animated.View>
@@ -421,7 +473,6 @@ export default function RootLayout() {
 
           <View style={{ flex: 1, paddingLeft: isDesktop ? 76 : 0 }}>
             <Stack screenOptions={{ headerShown: false, contentStyle: { backgroundColor: '#0A0A0C' }, animation: 'slide_from_right' }} />
-            {/* Desktop uses a 40px top offset to clear any window bezels, Mobile uses 50px for the notch */}
             <Toast config={toastConfig} position="top" topOffset={isDesktop ? 40 : 50} />
           </View>
         </View>
@@ -433,15 +484,13 @@ export default function RootLayout() {
 const styles = StyleSheet.create({
   loadingContainer: { flex: 1, justifyContent: 'center', alignItems: 'center' },
 
-  // --- TOAST STYLES (Mobile Defaults) ---
   toastWrapper: { width: '100%', alignItems: 'center', paddingHorizontal: 16 },
   toastContainer: { flexDirection: 'row', alignItems: 'center', width: '100%', paddingVertical: 12, paddingHorizontal: 16, borderRadius: 16, elevation: 5 },
   toastTextContainer: { marginLeft: 12, flex: 1 },
   toastText: { color: '#FFFFFF', fontWeight: 'bold', fontSize: 14 },
   toastSubText: { color: '#E0E0E0', fontSize: 12, marginTop: 2 },
 
-  // --- DESKTOP TOAST MODIFIERS ---
-  desktopToastWrapper: { alignItems: 'flex-end', paddingRight: 40 }, // Floats to top-right
+  desktopToastWrapper: { alignItems: 'flex-end', paddingRight: 40 },
   desktopToastContainer: {
     width: 350,
     paddingVertical: 16,
@@ -456,7 +505,6 @@ const styles = StyleSheet.create({
   desktopToastText: { fontSize: 16, letterSpacing: 0.2 },
   desktopToastSubText: { fontSize: 13, marginTop: 4 },
 
-  // --- SIDEBAR STYLES ---
   desktopNavRail: { position: 'absolute', top: 0, bottom: 0, left: 0, zIndex: 1000, overflow: 'hidden' },
   sidebarGradient: { ...StyleSheet.absoluteFillObject },
   navHoverArea: { flex: 1, paddingVertical: 24, overflow: 'hidden' },

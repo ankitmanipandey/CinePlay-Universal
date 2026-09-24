@@ -1,7 +1,7 @@
 import React from 'react';
 import {
     StyleSheet, Text, View, TouchableOpacity, ScrollView, Modal,
-    TextInput, ActivityIndicator, useWindowDimensions, KeyboardAvoidingView, Platform
+    TextInput, ActivityIndicator, useWindowDimensions, KeyboardAvoidingView, Platform, Linking
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -42,6 +42,10 @@ export default function ProfileScreenWeb() {
         unreadNotifsCount, unreadChatCount, TAB_BAR_HEIGHT,
         handleProtectedNavigation, handleLogout, openTheatreModal, handleCreateRoom, handleJoinRoom, router
     } = useProfileLogic();
+
+    const handleDownloadApp = () => {
+        Linking.openURL('https://pub-5f899dbb416d45508db7a37ab6140585.r2.dev/Android%20apk/CinePlay.apk');
+    };
 
     // --------------------------------------------------------
     // DESKTOP LAYOUT (Widescreen Dashboard)
@@ -233,6 +237,18 @@ export default function ProfileScreenWeb() {
                             <MenuRow icon="bookmark-outline" title="Watchlist" onPress={() => handleProtectedNavigation('/my-list?tab=watchlist')} />
                             <View style={styles.divider} />
                             <MenuRow icon="checkmark-done-circle-outline" title="Watch History" onPress={() => handleProtectedNavigation('/my-list?tab=watched')} />
+                        </View>
+                    </View>
+
+                    <View style={styles.menuSectionMobile}>
+                        <Text style={styles.sectionTitleMobile}>App</Text>
+                        <View style={styles.menuCard}>
+                            <MenuRow
+                                icon="logo-android"
+                                title="Download Android App"
+                                subtitle="Get the official CinePlay mobile app"
+                                onPress={handleDownloadApp}
+                            />
                         </View>
                     </View>
 

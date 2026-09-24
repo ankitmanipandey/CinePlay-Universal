@@ -109,23 +109,26 @@ export const toastConfig = {
 // 🔧 HOISTED COMPONENTS
 // ==========================================
 
-const NavItem = ({ icon, label, route, router, sidebarOpacity, onPressOverride }) => (
-  <TouchableOpacity
-    style={styles.navRailItem}
-    onPress={() => {
-      if (onPressOverride) {
-        onPressOverride();
-      } else if (route) {
-        router.push(route);
-      }
-    }}
-  >
-    <Ionicons name={icon} size={22} color="#E0E0E0" style={styles.navIcon} />
-    <Animated.Text style={[styles.navLabel, { opacity: sidebarOpacity }]} numberOfLines={1}>
-      {label}
-    </Animated.Text>
-  </TouchableOpacity>
-);
+const NavItem = ({ icon, label, route, router, sidebarOpacity, onPressOverride, isActive }) => {
+  const itemColor = isActive ? "#FFFFFF" : "#E0E0E0";
+  return (
+    <TouchableOpacity
+      style={styles.navRailItem}
+      onPress={() => {
+        if (onPressOverride) {
+          onPressOverride();
+        } else if (route) {
+          router.push(route);
+        }
+      }}
+    >
+      <Ionicons name={icon} size={22} color={itemColor} style={[styles.navIcon, isActive && { textShadowColor: 'rgba(255,255,255,0.4)', textShadowRadius: 8 }]} />
+      <Animated.Text style={[styles.navLabel, { opacity: sidebarOpacity, color: itemColor, fontWeight: isActive ? '800' : '700' }]} numberOfLines={1}>
+        {label}
+      </Animated.Text>
+    </TouchableOpacity>
+  );
+};
 
 const ExpandableNavItem = ({
   icon, label, filterKey, options, scrollIndex,
@@ -208,6 +211,7 @@ const ExpandableNavItem = ({
 export default function RootLayout() {
   const [isLoading, setIsLoading] = useState(true);
   const router = useRouter();
+  const pathname = usePathname();
   const { width: windowWidth } = useWindowDimensions();
   const isDesktop = windowWidth >= 1024;
 
@@ -374,9 +378,9 @@ export default function RootLayout() {
                     </Animated.Text>
                   </View>
 
-                  <NavItem icon="home" label="Home" onPressOverride={handleHomePress} sidebarOpacity={sidebarOpacity} />
-                  <NavItem icon="search" label="Search" route="/search" router={router} sidebarOpacity={sidebarOpacity} />
-                  <NavItem icon="musical-notes" label="Music" onPressOverride={handleMusicPress} sidebarOpacity={sidebarOpacity} />
+                  <NavItem icon="home" label="Home" onPressOverride={handleHomePress} sidebarOpacity={sidebarOpacity} isActive={pathname === '/home' && filters.type !== 'music'} />
+                  <NavItem icon="search" label="Search" route="/search" router={router} sidebarOpacity={sidebarOpacity} isActive={pathname === '/search'} />
+                  <NavItem icon="musical-notes" label="Music" onPressOverride={handleMusicPress} sidebarOpacity={sidebarOpacity} isActive={pathname === '/home' && filters.type === 'music'} />
                 </View>
 
                 <ScrollView
@@ -463,9 +467,10 @@ export default function RootLayout() {
                     label="Get App"
                     onPressOverride={handleDownloadApp}
                     sidebarOpacity={sidebarOpacity}
+                    isActive={false}
                   />
-                  <NavItem icon="bookmark" label="My List" route="/my-list" router={router} sidebarOpacity={sidebarOpacity} />
-                  <NavItem icon="person-circle" label="My Space" route="/profile" router={router} sidebarOpacity={sidebarOpacity} />
+                  <NavItem icon="bookmark" label="My List" route="/my-list" router={router} sidebarOpacity={sidebarOpacity} isActive={pathname === '/my-list'} />
+                  <NavItem icon="person-circle" label="My Space" route="/profile" router={router} sidebarOpacity={sidebarOpacity} isActive={pathname === '/profile'} />
                 </View>
               </Pressable>
             </Animated.View>

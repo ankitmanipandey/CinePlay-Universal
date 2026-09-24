@@ -514,7 +514,7 @@ export default function HomeScreen() {
                         musicModalStyle,
                     ]}
                 >
-                    <View style={{ flex: 1, paddingBottom: isDesktop ? 80 : 0 }}>
+                    <View style={{ flex: 1 }}>
                         <MusicPlayerUI
                             currentTrack={currentTrack} musicQueue={musicQueue} currentMusicIndex={currentMusicIndex} setCurrentMusicIndex={setCurrentMusicIndex}
                             musicProgress={musicProgress} musicDuration={musicDuration} isPlaying={uiPlaying} setIsPlaying={handleTogglePlay}

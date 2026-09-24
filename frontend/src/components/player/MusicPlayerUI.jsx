@@ -1,5 +1,5 @@
 import React from 'react';
-import { Animated, Image, Modal, Platform, StyleSheet, Text, TextInput, TouchableOpacity, View, ScrollView } from 'react-native';
+import { Animated, Image, Modal, Platform, StyleSheet, Text, TextInput, TouchableOpacity, View, ScrollView, useWindowDimensions } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons } from '@expo/vector-icons';
@@ -31,6 +31,13 @@ export const MusicPlayerUI = (props) => {
         artScale, artTranslateX, artTranslateY, heroOpacity, miniOpacity,
         handleSeek, handleTimerPress, handleStartCustomTimer, closeTimerModal, panResponderMusic, handleBackBtn
     } = useMusicPlayerUILogic(props);
+
+    const { height: winH } = useWindowDimensions();
+
+    // 1 on tall windows, shrinks down to 0.55 on short ones
+    const s = Math.min(1, Math.max(0.45, winH / 820));
+    const artSize = Math.round(320 * s);
+    const playSize = Math.round(76 * s);
 
     const decodedTitle = decodeText(currentTrack?.title);
     const decodedArtist = decodeText(currentTrack?.artist);
@@ -98,7 +105,7 @@ export const MusicPlayerUI = (props) => {
                 <LinearGradient colors={['#170D22', '#0A0A0C']} style={styles.desktopWrapper}>
 
                     {/* Header */}
-                    <View style={styles.desktopHeaderRow}>
+                    <View style={[styles.desktopHeaderRow, { paddingTop: 32 * s, paddingBottom: 16 * s }]}>
                         <TouchableOpacity onPress={handleBackBtn} style={{ padding: 10, cursor: 'pointer', zIndex: 30, flexDirection: 'row', alignItems: 'center' }}>
                             <Ionicons name="chevron-down" size={32} color="#FFFFFF" />
                             <Text style={{ color: '#FFF', marginLeft: 8, fontWeight: 'bold', fontSize: 16 }}>Close Player</Text>
@@ -113,31 +120,30 @@ export const MusicPlayerUI = (props) => {
                         </TouchableOpacity>
                     </View>
 
-                    {/* TWO-COLUMN LAYOUT */}
-                    <View style={styles.desktopTwoColumn}>
+                    <View style={[styles.desktopTwoColumn, { paddingBottom: 40 * s }]}>
 
-                        {/* LEFT COLUMN: Art & Controls (Perfectly Balanced) */}
+                        {/* LEFT COLUMN: no ScrollView, everything scales with `s` */}
                         <View style={styles.desktopLeftCol}>
-                            <View style={styles.desktopAlbumContainer}>
+                            <View style={[styles.desktopAlbumContainer, { width: artSize, height: artSize, marginBottom: 30 * s }]}>
                                 <Image source={{ uri: currentTrack?.artwork || currentTrack?.artworkUrl || currentTrack?.image }} style={styles.desktopAlbumArt} />
                             </View>
 
-                            <View style={styles.desktopTrackInfo}>
+                            <View style={[styles.desktopTrackInfo, { marginBottom: 20 * s }]}>
                                 <TouchableOpacity onPress={() => handleMusicAction(currentTrack?.mediaId, 'dislike')} style={{ padding: 8, cursor: 'pointer' }}>
-                                    <Ionicons name={musicPrefs?.[currentTrack?.mediaId] === 'dislike' ? "thumbs-down" : "thumbs-down-outline"} size={26} color={musicPrefs?.[currentTrack?.mediaId] === 'dislike' ? "#FF007A" : "#8F98A0"} />
+                                    <Ionicons name={musicPrefs?.[currentTrack?.mediaId] === 'dislike' ? "thumbs-down" : "thumbs-down-outline"} size={26 * s} color={musicPrefs?.[currentTrack?.mediaId] === 'dislike' ? "#FF007A" : "#8F98A0"} />
                                 </TouchableOpacity>
 
                                 <View style={{ flex: 1, alignItems: 'center', paddingHorizontal: 16 }}>
-                                    <Text style={styles.desktopLargeTitle} numberOfLines={1}>{decodedTitle}</Text>
-                                    <Text style={styles.desktopLargeArtist} numberOfLines={1}>{decodedArtist}</Text>
+                                    <Text style={[styles.desktopLargeTitle, { fontSize: 26 * s }]} numberOfLines={1}>{decodedTitle}</Text>
+                                    <Text style={[styles.desktopLargeArtist, { fontSize: 16 * s }]} numberOfLines={1}>{decodedArtist}</Text>
                                 </View>
 
                                 <TouchableOpacity onPress={() => handleMusicAction(currentTrack?.mediaId, 'toggleLike')} style={{ padding: 8, cursor: 'pointer' }}>
-                                    <Ionicons name={musicPrefs?.[currentTrack?.mediaId] === 'like' ? "heart" : "heart-outline"} size={26} color={musicPrefs?.[currentTrack?.mediaId] === 'like' ? "#FF007A" : "#FFF"} />
+                                    <Ionicons name={musicPrefs?.[currentTrack?.mediaId] === 'like' ? "heart" : "heart-outline"} size={26 * s} color={musicPrefs?.[currentTrack?.mediaId] === 'like' ? "#FF007A" : "#FFF"} />
                                 </TouchableOpacity>
                             </View>
 
-                            <View style={styles.seekContainerDesktop}>
+                            <View style={[styles.seekContainerDesktop, { marginBottom: 20 * s, marginTop: 10 * s }]}>
                                 <TouchableOpacity activeOpacity={1} style={[styles.progressBarTouchArea, { cursor: 'pointer' }]} onLayout={(e) => setBarWidth(e.nativeEvent.layout.width)} onPress={handleSeek}>
                                     <View style={styles.progressBarBgDesktop}>
                                         <LinearGradient colors={['#00E5FF', '#9B51E0']} start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }} style={[styles.progressBarFill, { width: `${(musicProgress / (musicDuration || 1)) * 100}%` }]} />
@@ -150,31 +156,35 @@ export const MusicPlayerUI = (props) => {
                                 </View>
                             </View>
 
-                            <View style={styles.musicControlsRowDesktop}>
-                                <TouchableOpacity onPress={() => setIsShuffle(!isShuffle)} style={{ padding: 10, cursor: 'pointer' }}>
-                                    <Ionicons name="shuffle" size={28} color={isShuffle ? "#00E5FF" : "#8F98A0"} />
+                            <View style={[styles.musicControlsRowDesktop, { gap: 32 * s }]}>
+                                <TouchableOpacity onPress={() => setIsShuffle(!isShuffle)} style={{ padding: 10 * s, cursor: 'pointer' }}>
+                                    <Ionicons name="shuffle" size={28 * s} color={isShuffle ? "#00E5FF" : "#8F98A0"} />
                                 </TouchableOpacity>
-                                <TouchableOpacity onPress={handlePrevTrack} style={{ padding: 10, cursor: 'pointer' }}>
-                                    <Ionicons name="play-skip-back" size={36} color={currentMusicIndex > 0 || isShuffle || isLoopActive ? "#FFFFFF" : "#555"} />
+                                <TouchableOpacity onPress={handlePrevTrack} style={{ padding: 10 * s, cursor: 'pointer' }}>
+                                    <Ionicons name="play-skip-back" size={36 * s} color={currentMusicIndex > 0 || isShuffle || isLoopActive ? "#FFFFFF" : "#555"} />
                                 </TouchableOpacity>
 
-                                <TouchableOpacity style={styles.neonPlayWrapperDesktop} activeOpacity={0.8} onPress={() => setIsPlaying(!isPlaying)}>
-                                    <LinearGradient colors={['#00E5FF', '#9B51E0', '#FF007A']} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={styles.neonPlayInner}>
-                                        <Ionicons name={isPlaying ? "pause" : "play"} size={40} color="#FFFFFF" style={!isPlaying ? { marginLeft: 6 } : {}} />
+                                <TouchableOpacity
+                                    style={[styles.neonPlayWrapperDesktop, { width: playSize, height: playSize, borderRadius: playSize / 2 }]}
+                                    activeOpacity={0.8}
+                                    onPress={() => setIsPlaying(!isPlaying)}
+                                >
+                                    <LinearGradient colors={['#00E5FF', '#9B51E0', '#FF007A']} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={[styles.neonPlayInner, { borderRadius: playSize / 2 }]}>
+                                        <Ionicons name={isPlaying ? "pause" : "play"} size={40 * s} color="#FFFFFF" style={!isPlaying ? { marginLeft: 6 * s } : {}} />
                                     </LinearGradient>
                                 </TouchableOpacity>
 
-                                <TouchableOpacity onPress={handleNextTrack} style={{ padding: 10, cursor: 'pointer' }}>
-                                    <Ionicons name="play-skip-forward" size={36} color={currentMusicIndex < musicQueue.length - 1 || isShuffle || isLoopActive ? "#FFFFFF" : "#555"} />
+                                <TouchableOpacity onPress={handleNextTrack} style={{ padding: 10 * s, cursor: 'pointer' }}>
+                                    <Ionicons name="play-skip-forward" size={36 * s} color={currentMusicIndex < musicQueue.length - 1 || isShuffle || isLoopActive ? "#FFFFFF" : "#555"} />
                                 </TouchableOpacity>
-                                <TouchableOpacity onPress={setLoopMode} style={{ padding: 10, position: 'relative', cursor: 'pointer' }}>
-                                    <Ionicons name="repeat" size={28} color={isLoopActive ? "#00E5FF" : "#8F98A0"} />
-                                    {isLoopOne && <Text style={{ position: 'absolute', fontSize: 11, color: '#00E5FF', top: 12, right: 6, fontWeight: 'bold' }}>1</Text>}
+                                <TouchableOpacity onPress={setLoopMode} style={{ padding: 10 * s, position: 'relative', cursor: 'pointer' }}>
+                                    <Ionicons name="repeat" size={28 * s} color={isLoopActive ? "#00E5FF" : "#8F98A0"} />
+                                    {isLoopOne && <Text style={{ position: 'absolute', fontSize: 11, color: '#00E5FF', top: 12 * s, right: 6, fontWeight: 'bold' }}>1</Text>}
                                 </TouchableOpacity>
                             </View>
                         </View>
 
-                        {/* RIGHT COLUMN: Queue */}
+                        {/* RIGHT COLUMN: Queue (unchanged) */}
                         <View style={styles.desktopRightCol}>
                             <Text style={styles.queueTitleDesktop}>Up Next</Text>
                             <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 40 }}>
@@ -193,7 +203,7 @@ export const MusicPlayerUI = (props) => {
                                             </View>
                                             {isActive ? <Ionicons name="stats-chart" size={20} color="#00E5FF" /> : <Ionicons name="play-circle-outline" size={24} color="#8F98A0" />}
                                         </TouchableOpacity>
-                                    )
+                                    );
                                 })}
                             </ScrollView>
                         </View>
@@ -369,8 +379,15 @@ const styles = StyleSheet.create({
 
     desktopTwoColumn: { flex: 1, flexDirection: 'row', gap: 40, paddingHorizontal: 60, paddingBottom: 40, paddingTop: 10 },
 
-    desktopLeftCol: { flex: 1, justifyContent: 'center', alignItems: 'center', paddingRight: 20 },
-    desktopAlbumContainer: { width: 320, height: 320, borderRadius: 16, elevation: 20, shadowColor: '#00E5FF', shadowOffset: { width: 0, height: 10 }, shadowOpacity: 0.25, shadowRadius: 30, marginBottom: 30 },
+    desktopLeftCol: { flex: 1, justifyContent: 'center', alignItems: 'center', paddingRight: 20, minHeight: 0 },
+    desktopAlbumContainer: {
+        borderRadius: 16,
+        elevation: 20,
+        shadowColor: '#00E5FF',
+        shadowOffset: { width: 0, height: 10 },
+        shadowOpacity: 0.25,
+        shadowRadius: 30
+    },
     desktopAlbumArt: { width: '100%', height: '100%', borderRadius: 16, backgroundColor: '#1E1428' },
     desktopTrackInfo: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', width: '100%', maxWidth: 500, marginBottom: 20 },
     desktopLargeTitle: { color: '#FFFFFF', fontSize: 26, fontWeight: '900', marginBottom: 4, letterSpacing: 0.5, textAlign: 'center' },

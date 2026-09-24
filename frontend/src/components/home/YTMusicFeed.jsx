@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { View, Text, ScrollView, TouchableOpacity, Image, TextInput, Keyboard, ActivityIndicator, Modal, Dimensions, StyleSheet, useWindowDimensions } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import ReAnimated, { LinearTransition } from 'react-native-reanimated';
+import ReAnimated, { FadeIn } from 'react-native-reanimated';
 import { LinearGradient } from 'expo-linear-gradient';
 
 import { useYTMusicFeedLogic } from '../../hooks/useYTMusicFeedLogic';
@@ -44,7 +44,7 @@ export const YTMusicFeed = ({ onPlayMusic, activeTrackId }) => {
     // --------------------------------------------------------
     if (isDesktop) {
         return (
-            <ReAnimated.View layout={LinearTransition} style={styles.desktopContainer}>
+            <ReAnimated.View entering={FadeIn.duration(300)} style={styles.desktopContainer}>
 
                 {/* LIKED SONGS MODAL DESKTOP (Centered Window) */}
                 <Modal visible={likedModalOpen} animationType="fade" transparent={true} onRequestClose={() => setLikedModalOpen(false)}>
@@ -303,7 +303,7 @@ export const YTMusicFeed = ({ onPlayMusic, activeTrackId }) => {
     // MOBILE & TABLET LAYOUT (Exact Native Clone)
     // --------------------------------------------------------
     return (
-        <ReAnimated.View layout={LinearTransition} style={{ flex: 1, paddingBottom: 40 }}>
+        <ReAnimated.View entering={FadeIn.duration(300)} style={{ flex: 1, paddingBottom: 40 }}>
             <Modal visible={likedModalOpen} animationType="slide" transparent={false} onRequestClose={() => setLikedModalOpen(false)}>
                 <View style={{ flex: 1, backgroundColor: '#0A0A0C' }}>
                     <View style={{ flexDirection: 'row', alignItems: 'center', paddingTop: insets.top + 20, paddingBottom: 16, paddingHorizontal: 16, borderBottomWidth: 1, borderColor: 'rgba(255,255,255,0.05)', backgroundColor: '#170D22' }}>

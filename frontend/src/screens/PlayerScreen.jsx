@@ -105,6 +105,9 @@ export default function PlayerScreenWeb() {
             handleCreateWatchParty={handleCreateWatchParty} handleAuthAction={handleAuthAction}
             handleToggleAction={handleToggleAction} watchlist={watchlist} watched={watched}
             livePlayer={livePlayer} id={id} type={type} channelName={channelName} router={router}
+            server={server}
+            setServer={setServer}
+            anilistId={anilistId}
         />
     );
 }

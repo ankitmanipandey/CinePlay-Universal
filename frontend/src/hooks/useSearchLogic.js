@@ -110,7 +110,12 @@ export const useSearchLogic = () => {
             };
             const response = await fetch(`${BACKEND_URL}/ai/recommend`, { method: 'POST', headers: fetchHeaders, body: JSON.stringify({ query }) });
 
-            if (!response.ok) throw new Error(`AI Fetch failed with status ${response.status}`);
+            if (!response.ok) {
+                if (response.status === 503) {
+                    throw new Error('AI is busy right now, try again in a moment.');
+                }
+                throw new Error(`AI Fetch failed with status ${response.status}`);
+            }
             const data = await response.json();
             if (!data.titles || !Array.isArray(data.titles)) throw new Error("Invalid titles array returned from AI API");
 
@@ -124,7 +129,7 @@ export const useSearchLogic = () => {
                 .filter(item => item.poster_path || item.backdrop_path);
         } catch (error) {
             console.error("[AI Search Error]", error);
-            Toast.show({ type: 'hotstarError', text1: 'AI Search failed to process.' });
+            Toast.show({ type: 'hotstarError', text1: error.message || 'AI Search failed to process.' });
             return [];
         }
     };
